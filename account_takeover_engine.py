@@ -11,57 +11,215 @@ import pandas as pd
 # DETECTOR 1: MULTIPLE FAILED LOGIN ATTEMPTS
 # ============================================================
 
-def detect_multiple_failed_logins(events, threshold=5):
+def detect_multiple_failed_logins(
+    events,
+    threshold=5,
+    window_minutes=10
+):
 
     events = events.copy()
+
+    # ========================================================
+    # VALIDATE / CONVERT TIMESTAMP
+    # ========================================================
 
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
+    events = events.dropna(
+        subset=[
+            "timestamp",
+            "user_id"
+        ]
+    )
+
+    # ========================================================
+    # ONLY FAILED LOGIN EVENTS
+    # ========================================================
+
     failed = events[
-        events["login_status"].astype(str).str.lower() == "failed"
+        events["login_status"]
+        .astype(str)
+        .str.lower()
+        .eq("failed")
     ].copy()
 
     detections = []
 
-    for user_id, user_events in failed.groupby("user_id"):
+    # ========================================================
+    # ANALYSE EACH USER
+    # ========================================================
 
-        user_events = user_events.sort_values("timestamp")
+    for user_id, user_events in failed.groupby(
+        "user_id"
+    ):
 
-        timestamps = user_events["timestamp"].tolist()
+        user_events = (
+            user_events
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
 
-        for i in range(len(timestamps)):
+        # ----------------------------------------------------
+        # Sliding window
+        # ----------------------------------------------------
 
-            window_start = timestamps[i]
+        left = 0
+
+        for right in range(
+            len(user_events)
+        ):
+
+            window_start = user_events.loc[
+                right,
+                "timestamp"
+            ]
 
             window_end = (
-                window_start +
-                pd.Timedelta(minutes=10)
+                window_start
+                + pd.Timedelta(
+                    minutes=window_minutes
+                )
             )
 
+            # Move through events occurring inside
+            # the current window
+            while (
+                left <= right
+                and user_events.loc[
+                    left,
+                    "timestamp"
+                ] < window_start
+            ):
+
+                left += 1
+
             attempts = user_events[
-                (user_events["timestamp"] >= window_start)
+                (
+                    user_events["timestamp"]
+                    >= window_start
+                )
                 &
-                (user_events["timestamp"] <= window_end)
+                (
+                    user_events["timestamp"]
+                    <= window_end
+                )
             ]
+
+            # =================================================
+            # THRESHOLD CHECK
+            # =================================================
 
             if len(attempts) >= threshold:
 
+                # ---------------------------------------------
+                # Source IP information
+                # ---------------------------------------------
+
+                source_ips = (
+                    attempts["ip_address"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+
+                unique_ip_count = len(
+                    source_ips
+                )
+
+                # ---------------------------------------------
+                # Time span
+                # ---------------------------------------------
+
+                first_attempt = (
+                    attempts["timestamp"].min()
+                )
+
+                last_attempt = (
+                    attempts["timestamp"].max()
+                )
+
+                duration_seconds = (
+                    last_attempt
+                    - first_attempt
+                ).total_seconds()
+
+                # ---------------------------------------------
+                # Failure rate
+                # ---------------------------------------------
+
+                if duration_seconds > 0:
+
+                    attempts_per_minute = (
+                        len(attempts)
+                        /
+                        (duration_seconds / 60)
+                    )
+
+                else:
+
+                    attempts_per_minute = float(
+                        len(attempts)
+                    )
+
+                # ---------------------------------------------
+                # Detection
+                # ---------------------------------------------
+
                 detections.append({
-                    "user_id": user_id,
-                    "threat": "Multiple Failed Login Attempts",
-                    "failed_attempts": len(attempts),
-                    "first_attempt": attempts["timestamp"].min(),
-                    "last_attempt": attempts["timestamp"].max(),
-                    "risk": "HIGH"
+
+                    "user_id":
+                        user_id,
+
+                    "threat":
+                        "Multiple Failed Login Attempts",
+
+                    "failed_attempts":
+                        len(attempts),
+
+                    "window_minutes":
+                        window_minutes,
+
+                    "unique_source_ips":
+                        unique_ip_count,
+
+                    "source_ips":
+                        ", ".join(
+                            source_ips
+                        ),
+
+                    "first_attempt":
+                        first_attempt,
+
+                    "last_attempt":
+                        last_attempt,
+
+                    "attempts_per_minute":
+                        round(
+                            attempts_per_minute,
+                            2
+                        ),
+
+                    "risk":
+                        "HIGH"
                 })
+
+                # ---------------------------------------------
+                # One detection per user for this detector
+                # ---------------------------------------------
 
                 break
 
-    return pd.DataFrame(detections)
+    # ========================================================
+    # RETURN RESULTS
+    # ========================================================
 
+    return pd.DataFrame(
+        detections
+    )
 
 # ============================================================
 # DETECTOR 2: PASSWORD SPRAYING
