@@ -72,25 +72,31 @@ def build_risk_report(
             })
 
 
-    # --------------------------------------------------------
-    # Detector 2
-    # --------------------------------------------------------
+# --------------------------------------------------------
+# Detector 2 — Password Spraying
+# --------------------------------------------------------
 
-    if not password_spraying_results.empty:
+if not password_spraying_results.empty:
 
-        for _, row in password_spraying_results.iterrows():
+    for _, row in password_spraying_results.iterrows():
 
-            # Password spraying is associated with an IP,
-            # so collect affected users from the source data
+        targeted_users = str(
+            row["targeted_user_ids"]
+        ).split(", ")
+
+        for user_id in targeted_users:
+
             detections.append({
-                "user_id": "MULTIPLE_USERS",
+                "user_id": user_id,
                 "threat": "Password Spraying",
                 "weight": RISK_WEIGHTS[
                     "Password Spraying"
                 ],
                 "reason": (
-                    f'{row["targeted_users"]} users targeted '
-                    f'from IP {row["ip_address"]}'
+                    f'Password spraying detected from '
+                    f'IP {row["ip_address"]}; '
+                    f'{row["targeted_users"]} accounts targeted '
+                    f'within the detection window'
                 )
             })
 
