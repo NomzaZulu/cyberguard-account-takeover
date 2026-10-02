@@ -3,7 +3,8 @@ import pandas as pd
 
 from account_takeover_engine import (
     detect_multiple_failed_logins,
-    detect_password_spraying
+    detect_password_spraying,
+    detect_unusual_locations
 )
 
 
