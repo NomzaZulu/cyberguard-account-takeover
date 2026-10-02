@@ -586,57 +586,217 @@ def detect_unusual_locations(
 # DETECTOR 4: UNKNOWN / NEW DEVICE
 # ============================================================
 
-def detect_unknown_devices(events, profiles):
+def detect_unknown_devices(
+    events,
+    profiles=None,
+    min_history=3
+):
 
     events = events.copy()
-    profiles = profiles.copy()
+
+    # ========================================================
+    # PREPARE EVENTS
+    # ========================================================
+
+    events["timestamp"] = pd.to_datetime(
+        events["timestamp"],
+        errors="coerce"
+    )
+
+    events = events.dropna(
+        subset=[
+            "timestamp",
+            "user_id",
+            "device"
+        ]
+    ).copy()
+
+    events["device"] = (
+        events["device"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # ========================================================
+    # BUILD PROFILE-BASED DEVICE BASELINE
+    # ========================================================
 
     profile_devices = {}
 
-    for _, profile in profiles.iterrows():
+    if profiles is not None:
 
-        known_devices = [
-            device.strip()
-            for device in str(
-                profile["known_devices"]
-            ).split("|")
-            if device.strip()
-        ]
+        profiles = profiles.copy()
 
-        profile_devices[
-            profile["user_id"]
-        ] = known_devices
+        if (
+            "user_id" in profiles.columns
+            and
+            "known_devices" in profiles.columns
+        ):
+
+            for _, profile in profiles.iterrows():
+
+                known_devices = [
+                    device.strip()
+                    for device in str(
+                        profile["known_devices"]
+                    ).split("|")
+                    if device.strip()
+                ]
+
+                if known_devices:
+
+                    profile_devices[
+                        str(profile["user_id"])
+                    ] = set(
+                        known_devices
+                    )
+
+    # ========================================================
+    # SORT HISTORICAL EVENTS
+    # ========================================================
+
+    events = events.sort_values(
+        ["user_id", "timestamp"]
+    ).reset_index(
+        drop=True
+    )
 
     detections = []
 
-    for _, event in events.iterrows():
+    # ========================================================
+    # ANALYSE EACH USER
+    # ========================================================
 
-        user_id = event["user_id"]
+    for user_id, user_events in events.groupby(
+        "user_id"
+    ):
 
-        device = str(
-            event["device"]
-        ).strip()
-
-        known_devices = profile_devices.get(
-            user_id,
-            []
+        user_events = (
+            user_events
+            .sort_values("timestamp")
+            .reset_index(drop=True)
         )
 
-        if device not in known_devices:
+        user_id = str(user_id)
 
-            detections.append({
-                "event_id": event["event_id"],
-                "user_id": user_id,
-                "threat": "Unknown / New Device",
-                "detected_device": device,
-                "known_devices": ", ".join(
-                    known_devices
-                ),
-                "timestamp": event["timestamp"],
-                "risk": "MEDIUM"
-            })
+        profile_baseline = profile_devices.get(
+            user_id,
+            set()
+        )
 
-    return pd.DataFrame(detections)
+        # ====================================================
+        # CHECK EACH LOGIN
+        # ====================================================
+
+        for i, event in user_events.iterrows():
+
+            current_device = (
+                str(event["device"]).strip()
+            )
+
+            # ------------------------------------------------
+            # MODE 1:
+            # Organisation profile baseline
+            # ------------------------------------------------
+
+            if profile_baseline:
+
+                known_devices = profile_baseline
+
+                baseline_source = (
+                    "Organisation profile"
+                )
+
+            # ------------------------------------------------
+            # MODE 2:
+            # Historical user baseline
+            # ------------------------------------------------
+
+            else:
+
+                historical_events = (
+                    user_events.iloc[:i]
+                )
+
+                historical_devices = (
+                    historical_events["device"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                )
+
+                device_counts = (
+                    historical_devices
+                    .value_counts()
+                )
+
+                known_devices = set(
+                    device_counts.index
+                )
+
+                baseline_source = (
+                    "Historical user activity"
+                )
+
+            # ------------------------------------------------
+            # Not enough history
+            # ------------------------------------------------
+
+            if (
+                not profile_baseline
+                and
+                i < min_history
+            ):
+
+                continue
+
+            # ------------------------------------------------
+            # Compare current device
+            # ------------------------------------------------
+
+            if current_device not in known_devices:
+
+                detections.append({
+
+                    "event_id":
+                        event["event_id"],
+
+                    "user_id":
+                        user_id,
+
+                    "threat":
+                        "Unknown / New Device",
+
+                    "detected_device":
+                        current_device,
+
+                    "known_devices":
+                        ", ".join(
+                            sorted(
+                                known_devices
+                            )
+                        ),
+
+                    "baseline_source":
+                        baseline_source,
+
+                    "historical_events":
+                        i,
+
+                    "timestamp":
+                        event["timestamp"],
+
+                    "risk":
+                        "MEDIUM"
+                })
+
+    # ========================================================
+    # RETURN RESULTS
+    # ========================================================
+
+    return pd.DataFrame(
+        detections
+    )
 
 
 # ============================================================
