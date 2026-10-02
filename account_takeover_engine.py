@@ -159,3 +159,60 @@ def detect_password_spraying(events, min_users=5, window_minutes=10):
                 break
 
     return pd.DataFrame(detections)
+
+
+# ============================================================
+# DETECTOR 3: UNUSUAL LOCATION
+# ============================================================
+
+def detect_unusual_locations(events, profiles):
+    """
+    Detect logins from locations that are not part of the
+    user's normal organisation profile.
+    """
+
+    events = events.copy()
+    profiles = profiles.copy()
+
+    # Create a lookup:
+    # user_id -> normal locations
+    profile_locations = {}
+
+    for _, profile in profiles.iterrows():
+
+        normal_locations = [
+            location.strip()
+            for location in str(
+                profile["normal_locations"]
+            ).split("|")
+        ]
+
+        profile_locations[profile["user_id"]] = normal_locations
+
+    detections = []
+
+    for _, event in events.iterrows():
+
+        user_id = event["user_id"]
+        location = event["location"]
+
+        normal_locations = profile_locations.get(
+            user_id,
+            []
+        )
+
+        if location not in normal_locations:
+
+            detections.append({
+                "event_id": event["event_id"],
+                "user_id": user_id,
+                "threat": "Unusual Login Location",
+                "detected_location": location,
+                "normal_locations": ", ".join(
+                    normal_locations
+                ),
+                "timestamp": event["timestamp"],
+                "risk": "MEDIUM"
+            })
+
+    return pd.DataFrame(detections)
