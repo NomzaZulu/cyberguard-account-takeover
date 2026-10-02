@@ -803,18 +803,38 @@ def detect_unknown_devices(
 # DETECTOR 5: SUSPICIOUS SESSION ACTIVITY
 # ============================================================
 
-def detect_suspicious_sessions(events):
+def detect_suspicious_sessions(
+    events,
+    min_session_events=3,
+    rapid_action_window_minutes=5
+):
 
     events = events.copy()
+
+    # ========================================================
+    # PREPARE DATA
+    # ========================================================
 
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
-    detections = []
+    required_columns = [
+        "event_id",
+        "user_id",
+        "session_id",
+        "session_action",
+        "timestamp"
+    ]
 
-    if "session_action" not in events.columns:
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in events.columns
+    ]
+
+    if missing_columns:
 
         return pd.DataFrame(
             columns=[
@@ -826,9 +846,20 @@ def detect_suspicious_sessions(events):
                 "device",
                 "location",
                 "timestamp",
+                "session_events",
+                "privileged_actions",
+                "rapid_actions",
                 "risk"
             ]
         )
+
+    events = events.dropna(
+        subset=[
+            "timestamp",
+            "user_id",
+            "session_id"
+        ]
+    ).copy()
 
     events["session_action"] = (
         events["session_action"]
@@ -837,37 +868,279 @@ def detect_suspicious_sessions(events):
         .str.lower()
     )
 
-    suspicious_actions = {
-        "session_change",
-        "privileged_action"
-    }
+    events = events.sort_values(
+        [
+            "user_id",
+            "session_id",
+            "timestamp"
+        ]
+    )
 
-    suspicious_action_events = events[
-        events["session_action"].isin(
-            suspicious_actions
+    detections = []
+
+    # ========================================================
+    # SESSION-LEVEL ANALYSIS
+    # ========================================================
+
+    for (
+        user_id,
+        session_id
+    ), session_events in events.groupby(
+        [
+            "user_id",
+            "session_id"
+        ]
+    ):
+
+        session_events = (
+            session_events
+            .sort_values("timestamp")
+            .reset_index(drop=True)
         )
-    ].copy()
 
-    for _, event in suspicious_action_events.iterrows():
+        if session_events.empty:
+            continue
+
+        # ----------------------------------------------------
+        # Basic session information
+        # ----------------------------------------------------
+
+        session_event_count = len(
+            session_events
+        )
+
+        privileged_events = session_events[
+            session_events["session_action"]
+            == "privileged_action"
+        ]
+
+        session_change_events = session_events[
+            session_events["session_action"]
+            == "session_change"
+        ]
+
+        privileged_count = len(
+            privileged_events
+        )
+
+        session_change_count = len(
+            session_change_events
+        )
+
+        # ----------------------------------------------------
+        # Detect rapid actions
+        # ----------------------------------------------------
+
+        rapid_actions = 0
+
+        timestamps = (
+            session_events["timestamp"]
+            .tolist()
+        )
+
+        for i in range(
+            1,
+            len(timestamps)
+        ):
+
+            time_difference = (
+                timestamps[i]
+                - timestamps[i - 1]
+            ).total_seconds() / 60
+
+            if time_difference <= (
+                rapid_action_window_minutes
+            ):
+
+                rapid_actions += 1
+
+        # ====================================================
+        # DETERMINE SUSPICIOUS BEHAVIOUR
+        # ====================================================
+
+        suspicious_reasons = []
+
+        # ----------------------------------------------------
+        # Condition 1:
+        # Privileged action
+        # ----------------------------------------------------
+
+        if privileged_count > 0:
+
+            suspicious_reasons.append(
+                "Privileged action performed"
+            )
+
+        # ----------------------------------------------------
+        # Condition 2:
+        # Session change
+        # ----------------------------------------------------
+
+        if session_change_count > 0:
+
+            suspicious_reasons.append(
+                "Session change detected"
+            )
+
+        # ----------------------------------------------------
+        # Condition 3:
+        # Rapid activity
+        # ----------------------------------------------------
+
+        if rapid_actions > 0:
+
+            suspicious_reasons.append(
+                "Multiple actions occurred within "
+                f"{rapid_action_window_minutes} minutes"
+            )
+
+        # ----------------------------------------------------
+        # Condition 4:
+        # Multiple indicators in same session
+        # ----------------------------------------------------
+
+        indicator_count = 0
+
+        if privileged_count > 0:
+            indicator_count += 1
+
+        if session_change_count > 0:
+            indicator_count += 1
+
+        if rapid_actions > 0:
+            indicator_count += 1
+
+        # ----------------------------------------------------
+        # A single ordinary session action is not enough.
+        #
+        # We require either:
+        #
+        #   privileged action
+        #
+        # OR
+        #
+        #   multiple behavioural indicators
+        #
+        # ----------------------------------------------------
+
+        suspicious = False
+
+        if privileged_count > 0:
+
+            suspicious = True
+
+        elif indicator_count >= 2:
+
+            suspicious = True
+
+        elif (
+            session_event_count >= min_session_events
+            and
+            rapid_actions >= 2
+        ):
+
+            suspicious = True
+
+        if not suspicious:
+            continue
+
+        # ====================================================
+        # RISK LEVEL
+        # ====================================================
 
         risk = "MEDIUM"
 
-        if event["session_action"] == "privileged_action":
+        if privileged_count > 0:
+
             risk = "HIGH"
 
+        elif indicator_count >= 2:
+
+            risk = "HIGH"
+
+        # ====================================================
+        # CREATE DETECTION
+        # ====================================================
+
+        first_event = (
+            session_events["timestamp"].min()
+        )
+
+        last_event = (
+            session_events["timestamp"].max()
+        )
+
+        first_row = session_events.iloc[0]
+
         detections.append({
-            "event_id": event["event_id"],
-            "user_id": event["user_id"],
-            "session_id": event["session_id"],
-            "threat": "Suspicious Session Activity",
-            "session_action": event["session_action"],
-            "device": event["device"],
-            "location": event["location"],
-            "timestamp": event["timestamp"],
-            "risk": risk
+
+            "event_id":
+                first_row["event_id"],
+
+            "user_id":
+                user_id,
+
+            "session_id":
+                session_id,
+
+            "threat":
+                "Suspicious Session Activity",
+
+            "session_action":
+                ", ".join(
+                    sorted(
+                        session_events[
+                            "session_action"
+                        ]
+                        .dropna()
+                        .unique()
+                        .tolist()
+                    )
+                ),
+
+            "device":
+                first_row.get(
+                    "device",
+                    ""
+                ),
+
+            "location":
+                first_row.get(
+                    "location",
+                    ""
+                ),
+
+            "timestamp":
+                first_event,
+
+            "session_events":
+                session_event_count,
+
+            "privileged_actions":
+                privileged_count,
+
+            "session_changes":
+                session_change_count,
+
+            "rapid_actions":
+                rapid_actions,
+
+            "reasons":
+                " | ".join(
+                    suspicious_reasons
+                ),
+
+            "risk":
+                risk
         })
 
-    return pd.DataFrame(detections)
+    # ========================================================
+    # RETURN
+    # ========================================================
+
+    return pd.DataFrame(
+        detections
+    )
 
 
 # ============================================================
