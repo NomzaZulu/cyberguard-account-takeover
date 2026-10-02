@@ -14,33 +14,25 @@ import pandas as pd
 def detect_multiple_failed_logins(events, threshold=5):
     """
     Detect multiple failed login attempts against the same user
-    within a short time window.
-
-    Default:
-        5 or more failed attempts within 10 minutes.
+    within a 10-minute window.
     """
 
     events = events.copy()
 
-    # Make sure timestamps are datetime objects
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
-    # Keep only failed login attempts
     failed = events[
-        events["login_status"].str.lower() == "failed"
+        events["login_status"].astype(str).str.lower() == "failed"
     ].copy()
 
     detections = []
 
-    # Analyse each user separately
     for user_id, user_events in failed.groupby("user_id"):
 
-        user_events = user_events.sort_values(
-            "timestamp"
-        )
+        user_events = user_events.sort_values("timestamp")
 
         timestamps = user_events["timestamp"].tolist()
 
@@ -65,16 +57,11 @@ def detect_multiple_failed_logins(events, threshold=5):
                     "user_id": user_id,
                     "threat": "Multiple Failed Login Attempts",
                     "failed_attempts": len(attempts),
-                    "first_attempt": attempts[
-                        "timestamp"
-                    ].min(),
-                    "last_attempt": attempts[
-                        "timestamp"
-                    ].max(),
+                    "first_attempt": attempts["timestamp"].min(),
+                    "last_attempt": attempts["timestamp"].max(),
                     "risk": "HIGH"
                 })
 
-                # One detection per user is enough
                 break
 
     return pd.DataFrame(detections)
@@ -90,36 +77,28 @@ def detect_password_spraying(
     window_minutes=10
 ):
     """
-    Detect possible password spraying.
+    Detect password spraying.
 
-    Password spraying occurs when the same source/IP
-    attempts authentication against multiple different
-    user accounts within a short period.
+    Same IP attempts authentication against multiple
+    different accounts within a short period.
     """
 
     events = events.copy()
 
-    # Convert timestamps
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
-    # Only failed login attempts
     failed = events[
-        events["login_status"].str.lower() == "failed"
+        events["login_status"].astype(str).str.lower() == "failed"
     ].copy()
 
     detections = []
 
-    # Analyse each source IP
-    for ip_address, ip_events in failed.groupby(
-        "ip_address"
-    ):
+    for ip_address, ip_events in failed.groupby("ip_address"):
 
-        ip_events = ip_events.sort_values(
-            "timestamp"
-        )
+        ip_events = ip_events.sort_values("timestamp")
 
         timestamps = ip_events["timestamp"].tolist()
 
@@ -140,10 +119,8 @@ def detect_password_spraying(
                 (ip_events["timestamp"] <= window_end)
             ]
 
-            # Number of different accounts targeted
             unique_users = (
-                window_events["user_id"]
-                .nunique()
+                window_events["user_id"].nunique()
             )
 
             if unique_users >= min_users:
@@ -152,16 +129,11 @@ def detect_password_spraying(
                     "ip_address": ip_address,
                     "threat": "Password Spraying",
                     "targeted_users": unique_users,
-                    "first_attempt": window_events[
-                        "timestamp"
-                    ].min(),
-                    "last_attempt": window_events[
-                        "timestamp"
-                    ].max(),
+                    "first_attempt": window_events["timestamp"].min(),
+                    "last_attempt": window_events["timestamp"].max(),
                     "risk": "HIGH"
                 })
 
-                # One detection per IP is enough
                 break
 
     return pd.DataFrame(detections)
@@ -179,10 +151,6 @@ def detect_unusual_locations(events, profiles):
 
     events = events.copy()
     profiles = profiles.copy()
-
-    # --------------------------------------------------------
-    # Build user -> normal locations lookup
-    # --------------------------------------------------------
 
     profile_locations = {}
 
@@ -202,10 +170,6 @@ def detect_unusual_locations(events, profiles):
 
     detections = []
 
-    # --------------------------------------------------------
-    # Check every login event
-    # --------------------------------------------------------
-
     for _, event in events.iterrows():
 
         user_id = event["user_id"]
@@ -219,7 +183,6 @@ def detect_unusual_locations(events, profiles):
             []
         )
 
-        # Location not recognised for this user
         if location not in normal_locations:
 
             detections.append({
@@ -238,7 +201,77 @@ def detect_unusual_locations(events, profiles):
 
 
 # ============================================================
-# OPTIONAL: TEST ENGINE DIRECTLY
+# DETECTOR 4: UNKNOWN / NEW DEVICE
+# ============================================================
+
+def detect_unknown_devices(events, profiles):
+    """
+    Detect login events from devices that are not listed
+    as known devices for that specific user.
+    """
+
+    events = events.copy()
+    profiles = profiles.copy()
+
+    # --------------------------------------------------------
+    # Build user -> known devices lookup
+    # --------------------------------------------------------
+
+    profile_devices = {}
+
+    for _, profile in profiles.iterrows():
+
+        known_devices = [
+            device.strip()
+            for device in str(
+                profile["known_devices"]
+            ).split("|")
+            if device.strip()
+        ]
+
+        profile_devices[
+            profile["user_id"]
+        ] = known_devices
+
+    detections = []
+
+    # --------------------------------------------------------
+    # Check every login event
+    # --------------------------------------------------------
+
+    for _, event in events.iterrows():
+
+        user_id = event["user_id"]
+
+        device = str(
+            event["device"]
+        ).strip()
+
+        known_devices = profile_devices.get(
+            user_id,
+            []
+        )
+
+        # Device is not recognised for this user
+        if device not in known_devices:
+
+            detections.append({
+                "event_id": event["event_id"],
+                "user_id": user_id,
+                "threat": "Unknown / New Device",
+                "detected_device": device,
+                "known_devices": ", ".join(
+                    known_devices
+                ),
+                "timestamp": event["timestamp"],
+                "risk": "MEDIUM"
+            })
+
+    return pd.DataFrame(detections)
+
+
+# ============================================================
+# OPTIONAL DIRECT ENGINE TEST
 # ============================================================
 
 if __name__ == "__main__":
@@ -248,10 +281,6 @@ if __name__ == "__main__":
     print("=" * 60)
 
     try:
-
-        # ----------------------------------------------------
-        # Load datasets
-        # ----------------------------------------------------
 
         profiles = pd.read_csv(
             "cyberguard_organisation_profiles.csv"
@@ -269,60 +298,71 @@ if __name__ == "__main__":
             f"Loaded {len(events)} login events."
         )
 
-
         # ----------------------------------------------------
         # Detector 1
         # ----------------------------------------------------
+
+        result_1 = detect_multiple_failed_logins(
+            events
+        )
 
         print(
             "\n[1] Multiple Failed Login Attempts"
         )
 
-        failed_login_results = (
-            detect_multiple_failed_logins(events)
-        )
-
         print(
-            f"Detections: {len(failed_login_results)}"
+            f"Detections: {len(result_1)}"
         )
-
 
         # ----------------------------------------------------
         # Detector 2
         # ----------------------------------------------------
 
+        result_2 = detect_password_spraying(
+            events
+        )
+
         print(
             "\n[2] Password Spraying"
         )
 
-        password_spraying_results = (
-            detect_password_spraying(events)
-        )
-
         print(
-            f"Detections: {len(password_spraying_results)}"
+            f"Detections: {len(result_2)}"
         )
-
 
         # ----------------------------------------------------
         # Detector 3
         # ----------------------------------------------------
 
+        result_3 = detect_unusual_locations(
+            events,
+            profiles
+        )
+
         print(
             "\n[3] Unusual Login Location"
         )
 
-        unusual_location_results = (
-            detect_unusual_locations(
-                events,
-                profiles
-            )
+        print(
+            f"Detections: {len(result_3)}"
+        )
+
+        # ----------------------------------------------------
+        # Detector 4
+        # ----------------------------------------------------
+
+        result_4 = detect_unknown_devices(
+            events,
+            profiles
         )
 
         print(
-            f"Detections: {len(unusual_location_results)}"
+            "\n[4] Unknown / New Device"
         )
 
+        print(
+            f"Detections: {len(result_4)}"
+        )
 
         # ----------------------------------------------------
         # Summary
@@ -333,18 +373,19 @@ if __name__ == "__main__":
         print("=" * 60)
 
         print(
-            f"\nMultiple failed logins : "
-            f"{len(failed_login_results)}"
+            f"\nMultiple failed logins : {len(result_1)}"
         )
 
         print(
-            f"Password spraying      : "
-            f"{len(password_spraying_results)}"
+            f"Password spraying      : {len(result_2)}"
         )
 
         print(
-            f"Unusual locations      : "
-            f"{len(unusual_location_results)}"
+            f"Unusual locations      : {len(result_3)}"
+        )
+
+        print(
+            f"Unknown devices        : {len(result_4)}"
         )
 
         print("\nEngine test completed.")
