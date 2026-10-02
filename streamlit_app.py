@@ -25,18 +25,313 @@ st.set_page_config(
 
 
 # ============================================================
+# CUSTOM STYLING
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+
+    .main-title {
+        font-size: 42px;
+        font-weight: 700;
+        margin-bottom: 0px;
+    }
+
+    .subtitle {
+        font-size: 20px;
+        opacity: 0.75;
+        margin-top: 0px;
+        margin-bottom: 25px;
+    }
+
+    .section-title {
+        font-size: 25px;
+        font-weight: 650;
+        margin-top: 25px;
+        margin-bottom: 15px;
+    }
+
+    .risk-card {
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid rgba(128,128,128,0.25);
+        margin-bottom: 15px;
+    }
+
+    .risk-title {
+        font-size: 22px;
+        font-weight: 650;
+    }
+
+    .risk-score {
+        font-size: 32px;
+        font-weight: 700;
+    }
+
+    .small-muted {
+        opacity: 0.65;
+        font-size: 14px;
+    }
+
+    .indicator-box {
+        padding: 12px 16px;
+        border-radius: 8px;
+        border: 1px solid rgba(128,128,128,0.20);
+        margin-bottom: 8px;
+    }
+
+    .evidence-box {
+        padding: 12px 16px;
+        border-radius: 8px;
+        border-left: 4px solid rgba(128,128,128,0.55);
+        margin-bottom: 8px;
+    }
+
+    .recommendation-box {
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid rgba(128,128,128,0.25);
+        margin-top: 15px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def get_risk_icon(level):
+    level = str(level).upper()
+
+    if level == "HIGH":
+        return "🔴"
+
+    if level == "MEDIUM":
+        return "🟠"
+
+    return "🟢"
+
+
+def get_recommendations(detectors):
+    """
+    Generate human-readable response recommendations
+    from the detectors that were triggered.
+    """
+
+    detectors_text = str(detectors).lower()
+
+    recommendations = []
+
+    if "multiple failed login" in detectors_text:
+        recommendations.append(
+            "Review recent failed-login activity and verify whether "
+            "the affected account is under attack."
+        )
+
+    if "password spraying" in detectors_text:
+        recommendations.append(
+            "Investigate the source IP and consider temporarily "
+            "blocking or rate-limiting the suspicious source."
+        )
+
+    if "unusual login location" in detectors_text:
+        recommendations.append(
+            "Verify the login location with the account owner."
+        )
+
+    if "unknown / new device" in detectors_text:
+        recommendations.append(
+            "Verify the new device and require additional "
+            "authentication if the device is not recognised."
+        )
+
+    if "suspicious session" in detectors_text:
+        recommendations.append(
+            "Review the affected session and consider revoking "
+            "the session if the activity is unauthorised."
+        )
+
+    if "sudden account behaviour" in detectors_text:
+        recommendations.append(
+            "Investigate the recent behavioural change against "
+            "the user's historical activity."
+        )
+
+    if not recommendations:
+        recommendations.append(
+            "Continue monitoring the account for additional "
+            "suspicious activity."
+        )
+
+    return recommendations
+
+
+def render_indicator_list(detectors):
+    """
+    Render detector names in a clean user-facing format.
+    """
+
+    if pd.isna(detectors):
+        return
+
+    detector_list = [
+        item.strip()
+        for item in str(detectors).split(",")
+        if item.strip()
+    ]
+
+    for detector in detector_list:
+        st.markdown(
+            f"""
+            <div class="indicator-box">
+                🔎 <strong>{detector}</strong>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+def render_evidence_list(reasons):
+    """
+    Render evidence/reasons as readable evidence cards.
+    """
+
+    if pd.isna(reasons):
+        return
+
+    reason_list = [
+        item.strip()
+        for item in str(reasons).split(" | ")
+        if item.strip()
+    ]
+
+    for reason in reason_list:
+        st.markdown(
+            f"""
+            <div class="evidence-box">
+                {reason}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+def render_account_report(report):
+    """
+    Render one complete human-readable account security report.
+    """
+
+    user_id = report["user_id"]
+    score = int(report["risk_score"])
+    level = str(report["risk_level"]).upper()
+    detector_count = int(report["detector_count"])
+
+    icon = get_risk_icon(level)
+
+    st.markdown(
+        f"""
+        <div class="risk-card">
+
+            <div class="risk-title">
+                {icon} Account Security Assessment
+            </div>
+
+            <div class="small-muted">
+                User ID: {user_id}
+            </div>
+
+            <br>
+
+            <div class="risk-score">
+                {score}/100
+            </div>
+
+            <div>
+                <strong>{level} RISK</strong>
+                &nbsp; • &nbsp;
+                {detector_count} detector(s) triggered
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # --------------------------------------------------------
+    # SCORE
+    # --------------------------------------------------------
+
+    st.progress(
+        min(max(score, 0), 100) / 100
+    )
+
+    # --------------------------------------------------------
+    # INDICATORS
+    # --------------------------------------------------------
+
+    st.markdown("#### Detected Indicators")
+
+    render_indicator_list(
+        report["detectors_triggered"]
+    )
+
+    # --------------------------------------------------------
+    # EVIDENCE
+    # --------------------------------------------------------
+
+    st.markdown("#### Why CyberGuard Flagged This Account")
+
+    render_evidence_list(
+        report["reasons"]
+    )
+
+    # --------------------------------------------------------
+    # RECOMMENDATION
+    # --------------------------------------------------------
+
+    st.markdown("#### Recommended Response")
+
+    recommendations = get_recommendations(
+        report["detectors_triggered"]
+    )
+
+    for recommendation in recommendations:
+
+        st.markdown(
+            f"""
+            <div class="recommendation-box">
+                🛡️ {recommendation}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+# ============================================================
 # HEADER
 # ============================================================
 
-st.title("🛡️ CyberGuard")
+st.markdown(
+    '<div class="main-title">🛡️ CyberGuard</div>',
+    unsafe_allow_html=True
+)
 
-st.subheader(
-    "Credential Theft & Account Takeover Detection"
+st.markdown(
+    '<div class="subtitle">'
+    'Credential Theft & Account Takeover Detection'
+    '</div>',
+    unsafe_allow_html=True
 )
 
 st.write(
-    "Analyse organisation login activity and detect "
-    "credential theft and account takeover indicators."
+    "Analyse organisation authentication activity and identify "
+    "behavioural indicators associated with credential theft "
+    "and account takeover."
 )
 
 
@@ -44,10 +339,12 @@ st.write(
 # FILE UPLOAD
 # ============================================================
 
-st.markdown("## Upload Data")
+st.markdown(
+    '<div class="section-title">📂 Upload Security Data</div>',
+    unsafe_allow_html=True
+)
 
 col1, col2 = st.columns(2)
-
 
 with col1:
 
@@ -58,7 +355,6 @@ with col1:
         type=["csv"],
         key="profiles"
     )
-
 
 with col2:
 
@@ -72,12 +368,16 @@ with col2:
 
 
 # ============================================================
-# MAIN ANALYSIS
+# MAIN APPLICATION
 # ============================================================
 
 if profiles_file is not None and events_file is not None:
 
     try:
+
+        # ----------------------------------------------------
+        # LOAD DATA
+        # ----------------------------------------------------
 
         profiles = pd.read_csv(
             profiles_file
@@ -88,7 +388,7 @@ if profiles_file is not None and events_file is not None:
         )
 
         st.success(
-            "Both datasets uploaded successfully."
+            "Both security datasets uploaded successfully."
         )
 
 
@@ -96,10 +396,14 @@ if profiles_file is not None and events_file is not None:
         # ORGANISATION OVERVIEW
         # ====================================================
 
-        st.markdown("## Organisation Overview")
+        st.markdown(
+            '<div class="section-title">'
+            '📊 Organisation Overview'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-        col1, col2, col3 = st.columns(3)
-
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
 
@@ -108,7 +412,6 @@ if profiles_file is not None and events_file is not None:
                 len(profiles)
             )
 
-
         with col2:
 
             st.metric(
@@ -116,12 +419,38 @@ if profiles_file is not None and events_file is not None:
                 len(events)
             )
 
-
         with col3:
+
+            if "user_id" in events.columns:
+
+                unique_users = events[
+                    "user_id"
+                ].nunique()
+
+            else:
+
+                unique_users = 0
 
             st.metric(
                 "Unique Users",
-                events["user_id"].nunique()
+                unique_users
+            )
+
+        with col4:
+
+            if "ip_address" in events.columns:
+
+                unique_ips = events[
+                    "ip_address"
+                ].nunique()
+
+            else:
+
+                unique_ips = 0
+
+            st.metric(
+                "Source IPs",
+                unique_ips
             )
 
 
@@ -129,27 +458,32 @@ if profiles_file is not None and events_file is not None:
         # DATASET PREVIEW
         # ====================================================
 
-        st.markdown("## Dataset Preview")
-
-
         with st.expander(
-            "View Organisation Profiles"
+            "View Uploaded Data"
         ):
 
-            st.dataframe(
-                profiles,
-                use_container_width=True
+            tab1, tab2 = st.tabs(
+                [
+                    "Organisation Profiles",
+                    "Login Events"
+                ]
             )
 
+            with tab1:
 
-        with st.expander(
-            "View Login Events"
-        ):
+                st.dataframe(
+                    profiles,
+                    use_container_width=True,
+                    height=300
+                )
 
-            st.dataframe(
-                events.head(100),
-                use_container_width=True
-            )
+            with tab2:
+
+                st.dataframe(
+                    events.head(100),
+                    use_container_width=True,
+                    height=300
+                )
 
 
         # ====================================================
@@ -157,285 +491,148 @@ if profiles_file is not None and events_file is not None:
         # ====================================================
 
         st.markdown(
-            "## Account Takeover Analysis"
+            '<div class="section-title">'
+            '🔍 Account Takeover Analysis'
+            '</div>',
+            unsafe_allow_html=True
         )
 
         analyze_button = st.button(
-            "🔍 Analyze Account Activity",
-            use_container_width=True
+            "🚀 Analyze Account Activity",
+            use_container_width=True,
+            type="primary"
         )
 
 
+        # ====================================================
+        # RUN ANALYSIS
+        # ====================================================
+
         if analyze_button:
 
-            # =================================================
-            # DETECTOR 1
-            # =================================================
+            with st.spinner(
+                "CyberGuard is analysing authentication activity..."
+            ):
 
-            st.markdown(
-                "### Detector 1 — Multiple Failed Login Attempts"
-            )
+                # ============================================
+                # DETECTOR 1
+                # ============================================
 
-            failed_login_results = (
-                detect_multiple_failed_logins(
-                    events
-                )
-            )
-
-
-            if failed_login_results.empty:
-
-                st.success(
-                    "No multiple failed-login attacks detected."
-                )
-
-            else:
-
-                st.error(
-                    f"{len(failed_login_results)} "
-                    "suspicious user(s) detected."
-                )
-
-                st.dataframe(
-                    failed_login_results,
-                    use_container_width=True
+                failed_login_results = (
+                    detect_multiple_failed_logins(
+                        events
+                    )
                 )
 
 
-            # =================================================
-            # DETECTOR 2
-            # =================================================
+                # ============================================
+                # DETECTOR 2
+                # ============================================
 
-            st.markdown(
-                "### Detector 2 — Password Spraying"
-            )
-
-            password_spraying_results = (
-                detect_password_spraying(
-                    events
-                )
-            )
-
-
-            if password_spraying_results.empty:
-
-                st.success(
-                    "No password spraying detected."
-                )
-
-            else:
-
-                st.error(
-                    f"{len(password_spraying_results)} "
-                    "possible password spraying attack(s) detected."
-                )
-
-                st.dataframe(
-                    password_spraying_results,
-                    use_container_width=True
+                password_spraying_results = (
+                    detect_password_spraying(
+                        events
+                    )
                 )
 
 
-            # =================================================
-            # DETECTOR 3
-            # =================================================
+                # ============================================
+                # DETECTOR 3
+                # ============================================
 
-            st.markdown(
-                "### Detector 3 — Unusual Login Location"
-            )
-
-            unusual_location_results = (
-                detect_unusual_locations(
-                    events,
-                    profiles
-                )
-            )
-
-
-            if unusual_location_results.empty:
-
-                st.success(
-                    "No unusual login locations detected."
+                unusual_location_results = (
+                    detect_unusual_locations(
+                        events,
+                        profiles
+                    )
                 )
 
-            else:
 
-                st.warning(
-                    f"{len(unusual_location_results)} "
-                    "unusual login location(s) detected."
+                # ============================================
+                # DETECTOR 4
+                # ============================================
+
+                unknown_device_results = (
+                    detect_unknown_devices(
+                        events,
+                        profiles
+                    )
                 )
 
-                st.dataframe(
-                    unusual_location_results,
-                    use_container_width=True
+
+                # ============================================
+                # DETECTOR 5
+                # ============================================
+
+                suspicious_session_results = (
+                    detect_suspicious_sessions(
+                        events
+                    )
+                )
+
+
+                # ============================================
+                # DETECTOR 6
+                # ============================================
+
+                behaviour_change_results = (
+                    detect_sudden_account_behaviour(
+                        events
+                    )
+                )
+
+
+                # ============================================
+                # RISK ENGINE
+                # ============================================
+
+                risk_report, detection_details = (
+                    build_risk_report(
+                        failed_login_results,
+                        password_spraying_results,
+                        unusual_location_results,
+                        unknown_device_results,
+                        suspicious_session_results,
+                        behaviour_change_results
+                    )
                 )
 
 
             # =================================================
-            # DETECTOR 4
+            # ANALYSIS COMPLETE
             # =================================================
 
-            st.markdown(
-                "### Detector 4 — Unknown / New Device"
-            )
-
-            unknown_device_results = (
-                detect_unknown_devices(
-                    events,
-                    profiles
-                )
-            )
-
-
-            if unknown_device_results.empty:
-
-                st.success(
-                    "No unknown or new devices detected."
-                )
-
-            else:
-
-                st.warning(
-                    f"{len(unknown_device_results)} "
-                    "unknown/new device event(s) detected."
-                )
-
-                st.dataframe(
-                    unknown_device_results,
-                    use_container_width=True
-                )
-
-
-            # =================================================
-            # DETECTOR 5
-            # =================================================
-
-            st.markdown(
-                "### Detector 5 — Suspicious Session Activity"
-            )
-
-            suspicious_session_results = (
-                detect_suspicious_sessions(
-                    events
-                )
-            )
-
-
-            if suspicious_session_results.empty:
-
-                st.success(
-                    "No suspicious session activity detected."
-                )
-
-            else:
-
-                st.warning(
-                    f"{len(suspicious_session_results)} "
-                    "suspicious session(s) detected."
-                )
-
-                st.dataframe(
-                    suspicious_session_results,
-                    use_container_width=True
-                )
-
-
-            # =================================================
-            # DETECTOR 6
-            # =================================================
-
-            st.markdown(
-                "### Detector 6 — Sudden Account Behaviour Change"
-            )
-
-            behaviour_change_results = (
-                detect_sudden_account_behaviour(
-                    events
-                )
-            )
-
-
-            if behaviour_change_results.empty:
-
-                st.success(
-                    "No significant account behaviour changes detected."
-                )
-
-            else:
-
-                st.warning(
-                    f"{len(behaviour_change_results)} "
-                    "account behaviour change(s) detected."
-                )
-
-                st.dataframe(
-                    behaviour_change_results,
-                    use_container_width=True
-                )
-
-
-            # =================================================
-            # CONSOLIDATED RISK ENGINE
-            # =================================================
-
-            st.markdown("---")
-
-            st.markdown(
-                "## 🛡️ CyberGuard Risk Assessment"
-            )
-
-            risk_report, detection_details = (
-                build_risk_report(
-                    failed_login_results,
-                    password_spraying_results,
-                    unusual_location_results,
-                    unknown_device_results,
-                    suspicious_session_results,
-                    behaviour_change_results
-                )
+            st.success(
+                "Analysis completed successfully."
             )
 
 
             # =================================================
-            # NO RISK
+            # NO DETECTIONS
             # =================================================
 
             if risk_report.empty:
 
                 st.success(
-                    "No suspicious account activity detected."
+                    "🟢 No suspicious account activity detected."
+                )
+
+                st.info(
+                    "CyberGuard did not identify any of the "
+                    "configured account-takeover indicators "
+                    "in the supplied authentication data."
                 )
 
 
             # =================================================
-            # RISK DETECTED
+            # DETECTIONS FOUND
             # =================================================
 
             else:
 
-                st.warning(
-                    f"{len(risk_report)} "
-                    "account risk profile(s) generated."
-                )
-
-
-                # ---------------------------------------------
-                # Risk table
-                # ---------------------------------------------
-
-                st.dataframe(
-                    risk_report,
-                    use_container_width=True
-                )
-
-
-                # =================================================
-                # SUMMARY METRICS
-                # =================================================
-
-                st.markdown(
-                    "### Risk Overview"
-                )
+                # =============================================
+                # CALCULATE SUMMARY
+                # =============================================
 
                 high_count = len(
                     risk_report[
@@ -455,178 +652,407 @@ if profiles_file is not None and events_file is not None:
                     ]
                 )
 
+                total_risky_accounts = len(
+                    risk_report
+                )
 
-                col1, col2, col3 = st.columns(3)
+                total_detections = len(
+                    detection_details
+                )
 
+
+                # =============================================
+                # SECURITY STATUS
+                # =============================================
+
+                st.markdown(
+                    '<div class="section-title">'
+                    '🚨 CyberGuard Security Status'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+                if high_count > 0:
+
+                    st.error(
+                        f"🔴 {high_count} high-risk account(s) "
+                        "require investigation."
+                    )
+
+                elif medium_count > 0:
+
+                    st.warning(
+                        f"🟠 {medium_count} medium-risk account(s) "
+                        "require review."
+                    )
+
+                else:
+
+                    st.info(
+                        "🟢 Suspicious activity was detected, "
+                        "but no account reached the high-risk threshold."
+                    )
+
+
+                # =============================================
+                # RISK OVERVIEW
+                # =============================================
+
+                st.markdown(
+                    "### Risk Overview"
+                )
+
+                col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
 
                     st.metric(
-                        "HIGH Risk",
+                        "High Risk",
                         high_count
                     )
-
 
                 with col2:
 
                     st.metric(
-                        "MEDIUM Risk",
+                        "Medium Risk",
                         medium_count
                     )
-
 
                 with col3:
 
                     st.metric(
-                        "LOW Risk",
+                        "Low Risk",
                         low_count
                     )
 
+                with col4:
 
-                # =================================================
-                # INDIVIDUAL THREAT REPORTS
-                # =================================================
+                    st.metric(
+                        "Accounts Flagged",
+                        total_risky_accounts
+                    )
+
+
+                # =============================================
+                # DETECTION OVERVIEW
+                # =============================================
 
                 st.markdown(
-                    "### Account Threat Reports"
+                    "### Detection Overview"
+                )
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+
+                    st.metric(
+                        "Detection Events",
+                        total_detections
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "Users Analysed",
+                        events["user_id"].nunique()
+                        if "user_id" in events.columns
+                        else 0
+                    )
+
+                with col3:
+
+                    st.metric(
+                        "Detector Types",
+                        6
+                    )
+
+
+                # =============================================
+                # PRIORITY ACCOUNTS
+                # =============================================
+
+                st.markdown(
+                    "### 🚨 Priority Accounts"
+                )
+
+                priority_columns = [
+                    "user_id",
+                    "risk_score",
+                    "risk_level",
+                    "detector_count"
+                ]
+
+                priority_table = (
+                    risk_report[
+                        priority_columns
+                    ]
+                    .copy()
+                )
+
+                priority_table.columns = [
+                    "User",
+                    "Risk Score",
+                    "Risk Level",
+                    "Detectors"
+                ]
+
+                st.dataframe(
+                    priority_table,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+
+                # =============================================
+                # ACCOUNT SECURITY REPORTS
+                # =============================================
+
+                st.markdown(
+                    "### 👤 Account Security Assessments"
+                )
+
+                st.caption(
+                    "Open an account to view the evidence "
+                    "behind its risk assessment."
                 )
 
 
                 for _, report in risk_report.iterrows():
 
                     user_id = report["user_id"]
+                    score = int(
+                        report["risk_score"]
+                    )
+                    level = str(
+                        report["risk_level"]
+                    ).upper()
 
-                    score = report["risk_score"]
+                    icon = get_risk_icon(
+                        level
+                    )
 
-                    level = report["risk_level"]
-
+                    detector_count = int(
+                        report["detector_count"]
+                    )
 
                     with st.expander(
-                        f"User {user_id} — "
+                        f"{icon} User {user_id} — "
                         f"{level} Risk — "
-                        f"{score}/100"
+                        f"{score}/100 — "
+                        f"{detector_count} detector(s)"
                     ):
 
-                        st.write(
-                            f"**User ID:** {user_id}"
-                        )
-
-                        st.write(
-                            f"**Risk Score:** "
-                            f"{score}/100"
-                        )
-
-                        st.write(
-                            f"**Risk Level:** "
-                            f"{level}"
-                        )
-
-                        st.write(
-                            f"**Detectors Triggered:** "
-                            f"{report['detector_count']}"
+                        render_account_report(
+                            report
                         )
 
 
-                        st.markdown(
-                            "**Indicators:**"
+                # =============================================
+                # TECHNICAL DETECTOR RESULTS
+                # =============================================
+
+                st.markdown(
+                    "### 🔧 Technical Detection Results"
+                )
+
+                st.caption(
+                    "These tables are intended for technical "
+                    "verification and debugging. Normal users "
+                    "do not need to inspect them."
+                )
+
+
+                with st.expander(
+                    "Detector 1 — Multiple Failed Login Attempts"
+                ):
+
+                    if failed_login_results.empty:
+
+                        st.success(
+                            "No detections."
                         )
 
-                        for detector in str(
-                            report[
-                                "detectors_triggered"
-                            ]
-                        ).split(", "):
+                    else:
 
-                            st.write(
-                                f"• {detector}"
-                            )
-
-
-                        st.markdown(
-                            "**Evidence:**"
+                        st.dataframe(
+                            failed_login_results,
+                            use_container_width=True
                         )
 
-                        for reason in str(
-                            report["reasons"]
-                        ).split(" | "):
 
-                            st.write(
-                                f"• {reason}"
-                            )
+                with st.expander(
+                    "Detector 2 — Password Spraying"
+                ):
+
+                    if password_spraying_results.empty:
+
+                        st.success(
+                            "No detections."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            password_spraying_results,
+                            use_container_width=True
+                        )
 
 
-            # =================================================
-            # RAW DETECTION DETAILS
-            # =================================================
+                with st.expander(
+                    "Detector 3 — Unusual Login Location"
+                ):
 
-            with st.expander(
-                "View Combined Detection Evidence"
-            ):
+                    if unusual_location_results.empty:
 
-                if detection_details.empty:
+                        st.success(
+                            "No detections."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            unusual_location_results,
+                            use_container_width=True
+                        )
+
+
+                with st.expander(
+                    "Detector 4 — Unknown / New Device"
+                ):
+
+                    if unknown_device_results.empty:
+
+                        st.success(
+                            "No detections."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            unknown_device_results,
+                            use_container_width=True
+                        )
+
+
+                with st.expander(
+                    "Detector 5 — Suspicious Session Activity"
+                ):
+
+                    if suspicious_session_results.empty:
+
+                        st.success(
+                            "No detections."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            suspicious_session_results,
+                            use_container_width=True
+                        )
+
+
+                with st.expander(
+                    "Detector 6 — Sudden Account Behaviour Change"
+                ):
+
+                    if behaviour_change_results.empty:
+
+                        st.success(
+                            "No detections."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            behaviour_change_results,
+                            use_container_width=True
+                        )
+
+
+                # =============================================
+                # COMBINED DETECTION EVIDENCE
+                # =============================================
+
+                with st.expander(
+                    "🧪 View Combined Detection Evidence"
+                ):
+
+                    if detection_details.empty:
+
+                        st.info(
+                            "No combined detection evidence available."
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            detection_details,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+
+                # =============================================
+                # FINAL STATUS
+                # =============================================
+
+                st.markdown("---")
+
+                st.markdown(
+                    "### 🛡️ Final CyberGuard Assessment"
+                )
+
+                if high_count > 0:
+
+                    st.error(
+                        "🔴 CyberGuard identified high-risk "
+                        "account activity requiring investigation."
+                    )
 
                     st.write(
-                        "No detection evidence available."
+                        f"{high_count} account(s) reached the "
+                        "high-risk threshold based on multiple "
+                        "authentication and behavioural indicators."
+                    )
+
+                elif medium_count > 0:
+
+                    st.warning(
+                        "🟠 CyberGuard identified suspicious "
+                        "account activity requiring review."
+                    )
+
+                    st.write(
+                        f"{medium_count} account(s) reached the "
+                        "medium-risk threshold."
                     )
 
                 else:
 
-                    st.dataframe(
-                        detection_details,
-                        use_container_width=True
+                    st.info(
+                        "🟢 CyberGuard detected suspicious signals "
+                        "but no account reached the high-risk threshold."
                     )
 
 
-            # =================================================
-            # FINAL STATUS
-            # =================================================
-
-            st.markdown("---")
-
-            st.markdown(
-                "## Final CyberGuard Status"
-            )
-
-
-            total_detections = (
-                len(failed_login_results)
-                + len(password_spraying_results)
-                + len(unusual_location_results)
-                + len(unknown_device_results)
-                + len(suspicious_session_results)
-                + len(behaviour_change_results)
-            )
-
-
-            if total_detections > 0:
-
-                st.error(
-                    "⚠️ Suspicious account activity detected."
-                )
-
-                st.write(
-                    f"CyberGuard identified "
-                    f"{total_detections} detection event(s) "
-                    "across the six account-takeover detectors."
-                )
-
-            else:
-
-                st.success(
-                    "✅ No suspicious account activity detected."
-                )
-
+    # ========================================================
+    # ERROR HANDLING
+    # ========================================================
 
     except Exception as e:
 
         st.error(
-            "An error occurred while analysing "
-            "the datasets."
+            "An error occurred while analysing the datasets."
         )
 
-        st.code(
-            str(e)
-        )
+        with st.expander(
+            "View Technical Error"
+        ):
+
+            st.code(
+                str(e)
+            )
 
 
 # ============================================================
@@ -636,6 +1062,24 @@ if profiles_file is not None and events_file is not None:
 else:
 
     st.info(
-        "Upload both CSV files to begin "
-        "account takeover analysis."
+        "Upload both the organisation profiles CSV and "
+        "login events CSV to begin account takeover analysis."
+    )
+
+    st.markdown(
+        """
+        ### What CyberGuard analyses
+
+        **Six account-takeover indicators:**
+
+        1. Multiple failed login attempts
+        2. Password spraying
+        3. Unusual login locations
+        4. Unknown or new devices
+        5. Suspicious session activity
+        6. Sudden account behaviour changes
+
+        CyberGuard combines these signals into an explainable
+        account-level risk assessment.
+        """
     )
