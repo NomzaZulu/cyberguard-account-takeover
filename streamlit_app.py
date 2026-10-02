@@ -353,7 +353,39 @@ if profiles_file is not None and events_file is not None:
                     events
                 )
             )
+            # ============================================================
+# CONSOLIDATED RISK ENGINE
+# ============================================================
 
+st.markdown("## 🛡️ CyberGuard Risk Assessment")
+
+risk_report, detection_details = build_risk_report(
+    failed_login_results,
+    password_spraying_results,
+    unusual_location_results,
+    unknown_device_results,
+    suspicious_session_results,
+    behaviour_change_results
+)
+
+
+if risk_report.empty:
+
+    st.success(
+        "No suspicious account activity detected."
+    )
+
+else:
+
+    st.warning(
+        f"{len(risk_report)} account risk profile(s) generated."
+    )
+
+    st.dataframe(
+        risk_report,
+        use_container_width=True
+    )
+            
 
             if behaviour_change_results.empty:
 
