@@ -120,8 +120,8 @@ if profiles_file is not None and events_file is not None:
         with col3:
 
             st.metric(
-                "Data Records",
-                len(events)
+                "Unique Users",
+                events["user_id"].nunique()
             )
 
 
@@ -353,39 +353,7 @@ if profiles_file is not None and events_file is not None:
                     events
                 )
             )
-            # ============================================================
-# CONSOLIDATED RISK ENGINE
-# ============================================================
 
-st.markdown("## 🛡️ CyberGuard Risk Assessment")
-
-risk_report, detection_details = build_risk_report(
-    failed_login_results,
-    password_spraying_results,
-    unusual_location_results,
-    unknown_device_results,
-    suspicious_session_results,
-    behaviour_change_results
-)
-
-
-if risk_report.empty:
-
-    st.success(
-        "No suspicious account activity detected."
-    )
-
-else:
-
-    st.warning(
-        f"{len(risk_report)} account risk profile(s) generated."
-    )
-
-    st.dataframe(
-        risk_report,
-        use_container_width=True
-    )
-            
 
             if behaviour_change_results.empty:
 
@@ -407,99 +375,226 @@ else:
 
 
             # =================================================
-            # DETECTION SUMMARY
+            # CONSOLIDATED RISK ENGINE
             # =================================================
+
+            st.markdown("---")
 
             st.markdown(
-                "## Detection Summary"
+                "## 🛡️ CyberGuard Risk Assessment"
             )
 
-
-            failed_count = len(
-                failed_login_results
-            )
-
-            spraying_count = len(
-                password_spraying_results
-            )
-
-            location_count = len(
-                unusual_location_results
-            )
-
-            device_count = len(
-                unknown_device_results
-            )
-
-            session_count = len(
-                suspicious_session_results
-            )
-
-            behaviour_count = len(
-                behaviour_change_results
-            )
-
-
-            summary_col1, summary_col2, summary_col3 = (
-                st.columns(3)
-            )
-
-
-            with summary_col1:
-
-                st.metric(
-                    "Multiple Failed Logins",
-                    failed_count
+            risk_report, detection_details = (
+                build_risk_report(
+                    failed_login_results,
+                    password_spraying_results,
+                    unusual_location_results,
+                    unknown_device_results,
+                    suspicious_session_results,
+                    behaviour_change_results
                 )
-
-                st.metric(
-                    "Password Spraying",
-                    spraying_count
-                )
+            )
 
 
-            with summary_col2:
+            # =================================================
+            # NO RISK
+            # =================================================
 
-                st.metric(
-                    "Unusual Locations",
-                    location_count
-                )
+            if risk_report.empty:
 
-                st.metric(
-                    "Unknown Devices",
-                    device_count
-                )
-
-
-            with summary_col3:
-
-                st.metric(
-                    "Suspicious Sessions",
-                    session_count
-                )
-
-                st.metric(
-                    "Behaviour Changes",
-                    behaviour_count
+                st.success(
+                    "No suspicious account activity detected."
                 )
 
 
             # =================================================
-            # OVERALL STATUS
+            # RISK DETECTED
             # =================================================
+
+            else:
+
+                st.warning(
+                    f"{len(risk_report)} "
+                    "account risk profile(s) generated."
+                )
+
+
+                # ---------------------------------------------
+                # Risk table
+                # ---------------------------------------------
+
+                st.dataframe(
+                    risk_report,
+                    use_container_width=True
+                )
+
+
+                # =================================================
+                # SUMMARY METRICS
+                # =================================================
+
+                st.markdown(
+                    "### Risk Overview"
+                )
+
+                high_count = len(
+                    risk_report[
+                        risk_report["risk_level"] == "HIGH"
+                    ]
+                )
+
+                medium_count = len(
+                    risk_report[
+                        risk_report["risk_level"] == "MEDIUM"
+                    ]
+                )
+
+                low_count = len(
+                    risk_report[
+                        risk_report["risk_level"] == "LOW"
+                    ]
+                )
+
+
+                col1, col2, col3 = st.columns(3)
+
+
+                with col1:
+
+                    st.metric(
+                        "HIGH Risk",
+                        high_count
+                    )
+
+
+                with col2:
+
+                    st.metric(
+                        "MEDIUM Risk",
+                        medium_count
+                    )
+
+
+                with col3:
+
+                    st.metric(
+                        "LOW Risk",
+                        low_count
+                    )
+
+
+                # =================================================
+                # INDIVIDUAL THREAT REPORTS
+                # =================================================
+
+                st.markdown(
+                    "### Account Threat Reports"
+                )
+
+
+                for _, report in risk_report.iterrows():
+
+                    user_id = report["user_id"]
+
+                    score = report["risk_score"]
+
+                    level = report["risk_level"]
+
+
+                    with st.expander(
+                        f"User {user_id} — "
+                        f"{level} Risk — "
+                        f"{score}/100"
+                    ):
+
+                        st.write(
+                            f"**User ID:** {user_id}"
+                        )
+
+                        st.write(
+                            f"**Risk Score:** "
+                            f"{score}/100"
+                        )
+
+                        st.write(
+                            f"**Risk Level:** "
+                            f"{level}"
+                        )
+
+                        st.write(
+                            f"**Detectors Triggered:** "
+                            f"{report['detector_count']}"
+                        )
+
+
+                        st.markdown(
+                            "**Indicators:**"
+                        )
+
+                        for detector in str(
+                            report[
+                                "detectors_triggered"
+                            ]
+                        ).split(", "):
+
+                            st.write(
+                                f"• {detector}"
+                            )
+
+
+                        st.markdown(
+                            "**Evidence:**"
+                        )
+
+                        for reason in str(
+                            report["reasons"]
+                        ).split(" | "):
+
+                            st.write(
+                                f"• {reason}"
+                            )
+
+
+            # =================================================
+            # RAW DETECTION DETAILS
+            # =================================================
+
+            with st.expander(
+                "View Combined Detection Evidence"
+            ):
+
+                if detection_details.empty:
+
+                    st.write(
+                        "No detection evidence available."
+                    )
+
+                else:
+
+                    st.dataframe(
+                        detection_details,
+                        use_container_width=True
+                    )
+
+
+            # =================================================
+            # FINAL STATUS
+            # =================================================
+
+            st.markdown("---")
 
             st.markdown(
-                "## Overall Status"
+                "## Final CyberGuard Status"
             )
 
 
             total_detections = (
-                failed_count
-                + spraying_count
-                + location_count
-                + device_count
-                + session_count
-                + behaviour_count
+                len(failed_login_results)
+                + len(password_spraying_results)
+                + len(unusual_location_results)
+                + len(unknown_device_results)
+                + len(suspicious_session_results)
+                + len(behaviour_change_results)
             )
 
 
@@ -510,8 +605,9 @@ else:
                 )
 
                 st.write(
-                    "CyberGuard identified one or more "
-                    "account-takeover indicators."
+                    f"CyberGuard identified "
+                    f"{total_detections} detection event(s) "
+                    "across the six account-takeover detectors."
                 )
 
             else:
