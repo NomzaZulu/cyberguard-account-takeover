@@ -12,10 +12,6 @@ import pandas as pd
 # ============================================================
 
 def detect_multiple_failed_logins(events, threshold=5):
-    """
-    Detect multiple failed login attempts against the same user
-    within a 10-minute window.
-    """
 
     events = events.copy()
 
@@ -41,8 +37,8 @@ def detect_multiple_failed_logins(events, threshold=5):
             window_start = timestamps[i]
 
             window_end = (
-                window_start
-                + pd.Timedelta(minutes=10)
+                window_start +
+                pd.Timedelta(minutes=10)
             )
 
             attempts = user_events[
@@ -76,12 +72,6 @@ def detect_password_spraying(
     min_users=5,
     window_minutes=10
 ):
-    """
-    Detect password spraying.
-
-    Same IP attempts authentication against multiple
-    different accounts within a short period.
-    """
 
     events = events.copy()
 
@@ -107,10 +97,8 @@ def detect_password_spraying(
             window_start = timestamps[i]
 
             window_end = (
-                window_start
-                + pd.Timedelta(
-                    minutes=window_minutes
-                )
+                window_start +
+                pd.Timedelta(minutes=window_minutes)
             )
 
             window_events = ip_events[
@@ -144,10 +132,6 @@ def detect_password_spraying(
 # ============================================================
 
 def detect_unusual_locations(events, profiles):
-    """
-    Detect login events from locations that are not listed
-    as normal locations for that specific user.
-    """
 
     events = events.copy()
     profiles = profiles.copy()
@@ -205,10 +189,6 @@ def detect_unusual_locations(events, profiles):
 # ============================================================
 
 def detect_unknown_devices(events, profiles):
-    """
-    Detect login events from devices that are not listed
-    as known devices for that specific user.
-    """
 
     events = events.copy()
     profiles = profiles.copy()
@@ -265,122 +245,110 @@ def detect_unknown_devices(events, profiles):
 # DETECTOR 5: SUSPICIOUS SESSION ACTIVITY
 # ============================================================
 
-def detect_suspicious_sessions(
-    events,
-    min_events=5,
-    window_minutes=10
-):
-    """
-    Detect sessions showing unusually high activity.
+def detect_suspicious_sessions(events):
 
-    This detector does NOT use:
+    """
+    Detect suspicious session activity using observed
+    session behaviour.
+
+    IMPORTANT:
+    This function does NOT use:
         - scenario
         - is_anomaly
 
-    It looks only at observed login/session events.
-
-    A session is flagged when the same session contains
-    multiple events within a short time window.
+    It uses:
+        - session_id
+        - session_action
+        - login_status
+        - device
+        - location
+        - timestamp
     """
 
     events = events.copy()
-
-    # --------------------------------------------------------
-    # Make sure timestamps are usable
-    # --------------------------------------------------------
 
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
-    # Remove rows without valid timestamps
-    events = events.dropna(
-        subset=["timestamp"]
-    )
-
     detections = []
 
     # --------------------------------------------------------
-    # Check whether session_id exists
+    # Make sure required column exists
     # --------------------------------------------------------
 
-    if "session_id" not in events.columns:
+    if "session_action" not in events.columns:
 
         return pd.DataFrame(
             columns=[
+                "event_id",
                 "user_id",
                 "session_id",
                 "threat",
-                "event_count",
-                "first_event",
-                "last_event",
+                "session_action",
+                "device",
+                "location",
+                "timestamp",
                 "risk"
             ]
         )
 
     # --------------------------------------------------------
-    # Analyse each session
+    # Normalise session actions
     # --------------------------------------------------------
 
-    for session_id, session_events in events.groupby(
-        "session_id"
-    ):
+    events["session_action"] = (
+        events["session_action"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
 
-        session_events = session_events.sort_values(
-            "timestamp"
+    # --------------------------------------------------------
+    # Actions that deserve session investigation
+    # --------------------------------------------------------
+
+    suspicious_actions = {
+        "session_change",
+        "privileged_action"
+    }
+
+    suspicious_action_events = events[
+        events["session_action"].isin(
+            suspicious_actions
         )
+    ].copy()
 
-        timestamps = session_events[
-            "timestamp"
-        ].tolist()
+    # --------------------------------------------------------
+    # Analyse suspicious session actions
+    # --------------------------------------------------------
 
-        for i in range(len(timestamps)):
+    for _, event in suspicious_action_events.iterrows():
 
-            window_start = timestamps[i]
+        risk = "MEDIUM"
 
-            window_end = (
-                window_start
-                + pd.Timedelta(
-                    minutes=window_minutes
-                )
-            )
+        # Privileged action is more sensitive
+        if event["session_action"] == "privileged_action":
+            risk = "HIGH"
 
-            window_events = session_events[
-                (session_events["timestamp"] >= window_start)
-                &
-                (session_events["timestamp"] <= window_end)
-            ]
-
-            event_count = len(window_events)
-
-            if event_count >= min_events:
-
-                user_id = window_events[
-                    "user_id"
-                ].iloc[0]
-
-                detections.append({
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "threat": "Suspicious Session Activity",
-                    "event_count": event_count,
-                    "first_event": window_events[
-                        "timestamp"
-                    ].min(),
-                    "last_event": window_events[
-                        "timestamp"
-                    ].max(),
-                    "risk": "MEDIUM"
-                })
-
-                break
+        detections.append({
+            "event_id": event["event_id"],
+            "user_id": event["user_id"],
+            "session_id": event["session_id"],
+            "threat": "Suspicious Session Activity",
+            "session_action": event["session_action"],
+            "device": event["device"],
+            "location": event["location"],
+            "timestamp": event["timestamp"],
+            "risk": risk
+        })
 
     return pd.DataFrame(detections)
 
 
 # ============================================================
-# OPTIONAL DIRECT ENGINE TEST
+# OPTIONAL DIRECT TEST
 # ============================================================
 
 if __name__ == "__main__":
@@ -488,6 +456,20 @@ if __name__ == "__main__":
         print(
             f"Detections: {len(result_5)}"
         )
+
+        # ----------------------------------------------------
+        # Display Detector 5 results
+        # ----------------------------------------------------
+
+        if not result_5.empty:
+
+            print("\nSuspicious sessions:")
+
+            print(
+                result_5.to_string(
+                    index=False
+                )
+            )
 
         # ----------------------------------------------------
         # Summary
