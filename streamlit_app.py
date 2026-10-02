@@ -10,6 +10,8 @@ from account_takeover_engine import (
     detect_sudden_account_behaviour
 )
 
+from risk_engine import build_risk_report
+
 
 # ============================================================
 # PAGE CONFIGURATION
