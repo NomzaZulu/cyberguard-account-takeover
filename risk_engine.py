@@ -8,16 +8,16 @@ import pandas as pd
 
 
 # ============================================================
-# RISK WEIGHTS
+# BASE SCORES
 # ============================================================
 
-RISK_WEIGHTS = {
-    "Multiple Failed Login Attempts": 25,
-    "Password Spraying": 30,
+BASE_SCORES = {
+    "Multiple Failed Login Attempts": 20,
+    "Password Spraying": 25,
     "Unusual Login Location": 15,
     "Unknown / New Device": 15,
     "Suspicious Session Activity": 20,
-    "Sudden Account Behaviour Change": 20
+    "Sudden Account Behaviour Change": 15
 }
 
 
@@ -27,14 +27,210 @@ RISK_WEIGHTS = {
 
 def get_risk_level(score):
 
-    if score >= 60:
+    if score >= 70:
         return "HIGH"
 
-    elif score >= 30:
+    elif score >= 35:
         return "MEDIUM"
 
     else:
         return "LOW"
+
+
+# ============================================================
+# EVIDENCE STRENGTH
+# ============================================================
+
+def get_evidence_bonus(
+    threat,
+    row
+):
+
+    bonus = 0
+
+    # --------------------------------------------------------
+    # Multiple failed logins
+    # --------------------------------------------------------
+
+    if threat == "Multiple Failed Login Attempts":
+
+        failed_attempts = int(
+            row.get(
+                "failed_attempts",
+                0
+            )
+        )
+
+        unique_ips = int(
+            row.get(
+                "unique_source_ips",
+                1
+            )
+        )
+
+        if failed_attempts >= 8:
+            bonus += 5
+
+        if failed_attempts >= 12:
+            bonus += 5
+
+        if unique_ips >= 2:
+            bonus += 5
+
+    # --------------------------------------------------------
+    # Password spraying
+    # --------------------------------------------------------
+
+    elif threat == "Password Spraying":
+
+        targeted_users = int(
+            row.get(
+                "targeted_users",
+                0
+            )
+        )
+
+        if targeted_users >= 8:
+            bonus += 5
+
+        if targeted_users >= 12:
+            bonus += 5
+
+    # --------------------------------------------------------
+    # Unusual location
+    # --------------------------------------------------------
+
+    elif threat == "Unusual Login Location":
+
+        baseline_source = str(
+            row.get(
+                "baseline_source",
+                ""
+            )
+        )
+
+        if baseline_source == "Historical user activity":
+            bonus += 3
+
+    # --------------------------------------------------------
+    # New device
+    # --------------------------------------------------------
+
+    elif threat == "Unknown / New Device":
+
+        baseline_source = str(
+            row.get(
+                "baseline_source",
+                ""
+            )
+        )
+
+        if baseline_source == "Historical user activity":
+            bonus += 3
+
+    # --------------------------------------------------------
+    # Suspicious session
+    # --------------------------------------------------------
+
+    elif threat == "Suspicious Session Activity":
+
+        privileged_actions = int(
+            row.get(
+                "privileged_actions",
+                0
+            )
+        )
+
+        rapid_actions = int(
+            row.get(
+                "rapid_actions",
+                0
+            )
+        )
+
+        if privileged_actions > 0:
+            bonus += 10
+
+        if rapid_actions >= 2:
+            bonus += 5
+
+    # --------------------------------------------------------
+    # Behaviour change
+    # --------------------------------------------------------
+
+    elif threat == "Sudden Account Behaviour Change":
+
+        indicators = str(
+            row.get(
+                "indicators",
+                ""
+            )
+        )
+
+        indicator_count = len(
+            [
+                item
+                for item in indicators.split(";")
+                if item.strip()
+            ]
+        )
+
+        if indicator_count >= 2:
+            bonus += 5
+
+        if indicator_count >= 3:
+            bonus += 5
+
+    return bonus
+
+
+# ============================================================
+# BUILD DETECTION RECORD
+# ============================================================
+
+def add_detection(
+    detections,
+    user_id,
+    threat,
+    row,
+    reason
+):
+
+    base_score = BASE_SCORES.get(
+        threat,
+        0
+    )
+
+    bonus = get_evidence_bonus(
+        threat,
+        row
+    )
+
+    contribution = min(
+        base_score + bonus,
+        40
+    )
+
+    detections.append({
+
+        "user_id":
+            str(user_id),
+
+        "threat":
+            threat,
+
+        "base_score":
+            base_score,
+
+        "evidence_bonus":
+            bonus,
+
+        "score_contribution":
+            contribution,
+
+        "reason":
+            reason
+    })
 
 
 # ============================================================
@@ -55,190 +251,307 @@ def build_risk_report(
 
     # ========================================================
     # DETECTOR 1
-    # Multiple Failed Login Attempts
+    # MULTIPLE FAILED LOGIN ATTEMPTS
     # ========================================================
 
-    if not failed_login_results.empty:
+    if (
+        failed_login_results is not None
+        and
+        not failed_login_results.empty
+    ):
 
-        for _, row in failed_login_results.iterrows():
+        for _, row in (
+            failed_login_results.iterrows()
+        ):
 
-            detections.append({
+            user_id = row[
+                "user_id"
+            ]
 
-                "user_id": row["user_id"],
+            failed_attempts = row.get(
+                "failed_attempts",
+                0
+            )
 
-                "threat":
-                    "Multiple Failed Login Attempts",
+            source_ips = row.get(
+                "source_ips",
+                ""
+            )
 
-                "weight":
-                    RISK_WEIGHTS[
-                        "Multiple Failed Login Attempts"
-                    ],
+            reason = (
+                f"{failed_attempts} failed "
+                f"login attempts detected"
+            )
 
-                "reason": (
-                    f'{row["failed_attempts"]} '
-                    f'failed login attempts detected'
+            if str(source_ips).strip():
+
+                reason += (
+                    f" from source IP(s): "
+                    f"{source_ips}"
                 )
-            })
+
+            add_detection(
+                detections,
+                user_id,
+                "Multiple Failed Login Attempts",
+                row,
+                reason
+            )
 
 
     # ========================================================
     # DETECTOR 2
-    # Password Spraying
+    # PASSWORD SPRAYING
     # ========================================================
 
-    if not password_spraying_results.empty:
+    if (
+        password_spraying_results is not None
+        and
+        not password_spraying_results.empty
+    ):
 
-        for _, row in password_spraying_results.iterrows():
-
-            # ------------------------------------------------
-            # Get the actual targeted users
-            # ------------------------------------------------
-
-            targeted_users = str(
-                row["targeted_user_ids"]
-            ).split(", ")
-
+        for _, row in (
+            password_spraying_results.iterrows()
+        ):
 
             # ------------------------------------------------
-            # Create individual evidence for every
-            # targeted account
+            # New detector format:
+            # one row can contain targeted users
             # ------------------------------------------------
+
+            if "targeted_user_ids" in row.index:
+
+                targeted_users = [
+                    user.strip()
+                    for user in str(
+                        row["targeted_user_ids"]
+                    ).split(",")
+                    if user.strip()
+                ]
+
+            # ------------------------------------------------
+            # Alternative format:
+            # already one user per row
+            # ------------------------------------------------
+
+            elif "user_id" in row.index:
+
+                targeted_users = [
+                    str(
+                        row["user_id"]
+                    )
+                ]
+
+            else:
+
+                targeted_users = []
+
 
             for user_id in targeted_users:
 
-                detections.append({
+                targeted_count = row.get(
+                    "targeted_users",
+                    len(targeted_users)
+                )
 
-                    "user_id": user_id,
+                reason = (
+                    f"Password spraying detected "
+                    f"from IP "
+                    f"{row.get('ip_address', 'unknown')}; "
+                    f"{targeted_count} accounts targeted"
+                )
 
-                    "threat":
-                        "Password Spraying",
-
-                    "weight":
-                        RISK_WEIGHTS[
-                            "Password Spraying"
-                        ],
-
-                    "reason": (
-                        f'Password spraying detected '
-                        f'from IP {row["ip_address"]}; '
-                        f'{row["targeted_users"]} accounts '
-                        f'targeted within the detection window'
-                    )
-                })
+                add_detection(
+                    detections,
+                    user_id,
+                    "Password Spraying",
+                    row,
+                    reason
+                )
 
 
     # ========================================================
     # DETECTOR 3
-    # Unusual Login Location
+    # UNUSUAL LOGIN LOCATION
     # ========================================================
 
-    if not unusual_location_results.empty:
+    if (
+        unusual_location_results is not None
+        and
+        not unusual_location_results.empty
+    ):
 
-        for _, row in unusual_location_results.iterrows():
+        for _, row in (
+            unusual_location_results.iterrows()
+        ):
 
-            detections.append({
+            user_id = row[
+                "user_id"
+            ]
 
-                "user_id":
-                    row["user_id"],
+            location = row.get(
+                "detected_location",
+                "unknown"
+            )
 
-                "threat":
-                    "Unusual Login Location",
+            baseline_source = row.get(
+                "baseline_source",
+                ""
+            )
 
-                "weight":
-                    RISK_WEIGHTS[
-                        "Unusual Login Location"
-                    ],
+            reason = (
+                f"Login detected from "
+                f"{location}"
+            )
 
-                "reason": (
-                    f'Login detected from '
-                    f'{row["detected_location"]}'
+            if str(
+                baseline_source
+            ).strip():
+
+                reason += (
+                    f"; baseline based on "
+                    f"{baseline_source}"
                 )
-            })
+
+            add_detection(
+                detections,
+                user_id,
+                "Unusual Login Location",
+                row,
+                reason
+            )
 
 
     # ========================================================
     # DETECTOR 4
-    # Unknown / New Device
+    # UNKNOWN / NEW DEVICE
     # ========================================================
 
-    if not unknown_device_results.empty:
+    if (
+        unknown_device_results is not None
+        and
+        not unknown_device_results.empty
+    ):
 
-        for _, row in unknown_device_results.iterrows():
+        for _, row in (
+            unknown_device_results.iterrows()
+        ):
 
-            detections.append({
+            user_id = row[
+                "user_id"
+            ]
 
-                "user_id":
-                    row["user_id"],
+            device = row.get(
+                "detected_device",
+                "unknown"
+            )
 
-                "threat":
-                    "Unknown / New Device",
+            baseline_source = row.get(
+                "baseline_source",
+                ""
+            )
 
-                "weight":
-                    RISK_WEIGHTS[
-                        "Unknown / New Device"
-                    ],
+            reason = (
+                f"Previously unseen device: "
+                f"{device}"
+            )
 
-                "reason": (
-                    f'Previously unknown device: '
-                    f'{row["detected_device"]}'
+            if str(
+                baseline_source
+            ).strip():
+
+                reason += (
+                    f"; baseline based on "
+                    f"{baseline_source}"
                 )
-            })
+
+            add_detection(
+                detections,
+                user_id,
+                "Unknown / New Device",
+                row,
+                reason
+            )
 
 
     # ========================================================
     # DETECTOR 5
-    # Suspicious Session Activity
+    # SUSPICIOUS SESSION ACTIVITY
     # ========================================================
 
-    if not suspicious_session_results.empty:
+    if (
+        suspicious_session_results is not None
+        and
+        not suspicious_session_results.empty
+    ):
 
-        for _, row in suspicious_session_results.iterrows():
+        for _, row in (
+            suspicious_session_results.iterrows()
+        ):
 
-            detections.append({
+            user_id = row[
+                "user_id"
+            ]
 
-                "user_id":
-                    row["user_id"],
+            reasons = row.get(
+                "reasons",
+                ""
+            )
 
-                "threat":
-                    "Suspicious Session Activity",
+            if not str(
+                reasons
+            ).strip():
 
-                "weight":
-                    RISK_WEIGHTS[
-                        "Suspicious Session Activity"
-                    ],
-
-                "reason": (
-                    f'Suspicious session action: '
-                    f'{row["session_action"]}'
+                reasons = (
+                    f"Suspicious session activity: "
+                    f"{row.get('session_action', '')}"
                 )
-            })
+
+            add_detection(
+                detections,
+                user_id,
+                "Suspicious Session Activity",
+                row,
+                str(reasons)
+            )
 
 
     # ========================================================
     # DETECTOR 6
-    # Sudden Account Behaviour Change
+    # SUDDEN ACCOUNT BEHAVIOUR CHANGE
     # ========================================================
 
-    if not behaviour_change_results.empty:
+    if (
+        behaviour_change_results is not None
+        and
+        not behaviour_change_results.empty
+    ):
 
-        for _, row in behaviour_change_results.iterrows():
+        for _, row in (
+            behaviour_change_results.iterrows()
+        ):
 
-            detections.append({
+            user_id = row[
+                "user_id"
+            ]
 
-                "user_id":
-                    row["user_id"],
+            indicators = row.get(
+                "indicators",
+                ""
+            )
 
-                "threat":
-                    "Sudden Account Behaviour Change",
+            reason = (
+                "Behaviour change detected: "
+                f"{indicators}"
+            )
 
-                "weight":
-                    RISK_WEIGHTS[
-                        "Sudden Account Behaviour Change"
-                    ],
-
-                "reason":
-                    row["indicators"]
-            })
+            add_detection(
+                detections,
+                user_id,
+                "Sudden Account Behaviour Change",
+                row,
+                reason
+            )
 
 
     # ========================================================
@@ -254,7 +567,7 @@ def build_risk_report(
 
 
     # ========================================================
-    # CREATE DETECTION DATAFRAME
+    # DETECTION DATAFRAME
     # ========================================================
 
     detections_df = pd.DataFrame(
@@ -263,48 +576,174 @@ def build_risk_report(
 
 
     # ========================================================
-    # AGGREGATE RISK BY USER
+    # AGGREGATE BY USER
     # ========================================================
 
     risk_rows = []
 
 
-    for user_id, user_events in detections_df.groupby(
-        "user_id"
+    for user_id, user_events in (
+        detections_df.groupby(
+            "user_id"
+        )
     ):
 
         # ----------------------------------------------------
-        # Unique detector types
+        # Each detector counts only once
         # ----------------------------------------------------
 
-        unique_threats = (
-            user_events["threat"]
-            .drop_duplicates()
-            .tolist()
+        unique_events = (
+            user_events
+            .drop_duplicates(
+                subset=[
+                    "threat"
+                ]
+            )
         )
 
 
         # ----------------------------------------------------
-        # Calculate raw score
+        # Basic score
         # ----------------------------------------------------
 
-        raw_score = int(
-            user_events["weight"].sum()
+        score = int(
+            unique_events[
+                "score_contribution"
+            ].sum()
         )
 
 
         # ----------------------------------------------------
-        # Limit score to 100
+        # Detect combinations
+        # ----------------------------------------------------
+
+        threats = set(
+            unique_events[
+                "threat"
+            ]
+        )
+
+
+        combination_bonus = 0
+
+        combination_reasons = []
+
+
+        # ----------------------------------------------------
+        # Strong combination:
+        #
+        # password spraying
+        # +
+        # unusual location
+        # ----------------------------------------------------
+
+        if {
+            "Password Spraying",
+            "Unusual Login Location"
+        }.issubset(threats):
+
+            combination_bonus += 10
+
+            combination_reasons.append(
+                "Password spraying combined "
+                "with unusual login location"
+            )
+
+
+        # ----------------------------------------------------
+        # Strong combination:
+        #
+        # password spraying
+        # +
+        # new device
+        # ----------------------------------------------------
+
+        if {
+            "Password Spraying",
+            "Unknown / New Device"
+        }.issubset(threats):
+
+            combination_bonus += 10
+
+            combination_reasons.append(
+                "Password spraying combined "
+                "with a new device"
+            )
+
+
+        # ----------------------------------------------------
+        # Strong combination:
+        #
+        # location + device + session
+        # ----------------------------------------------------
+
+        if {
+            "Unusual Login Location",
+            "Unknown / New Device",
+            "Suspicious Session Activity"
+        }.issubset(threats):
+
+            combination_bonus += 10
+
+            combination_reasons.append(
+                "Unusual location, new device, "
+                "and suspicious session activity"
+            )
+
+
+        # ----------------------------------------------------
+        # Failed login + new device
+        # ----------------------------------------------------
+
+        if {
+            "Multiple Failed Login Attempts",
+            "Unknown / New Device"
+        }.issubset(threats):
+
+            combination_bonus += 5
+
+            combination_reasons.append(
+                "Failed-login activity combined "
+                "with a new device"
+            )
+
+
+        # ----------------------------------------------------
+        # Failed login + unusual location
+        # ----------------------------------------------------
+
+        if {
+            "Multiple Failed Login Attempts",
+            "Unusual Login Location"
+        }.issubset(threats):
+
+            combination_bonus += 5
+
+            combination_reasons.append(
+                "Failed-login activity combined "
+                "with an unusual location"
+            )
+
+
+        # ----------------------------------------------------
+        # Apply combination bonus
+        # ----------------------------------------------------
+
+        score += combination_bonus
+
+
+        # ----------------------------------------------------
+        # Cap score
         # ----------------------------------------------------
 
         score = min(
-            raw_score,
+            score,
             100
         )
 
 
         # ----------------------------------------------------
-        # Determine risk level
+        # Determine level
         # ----------------------------------------------------
 
         risk_level = get_risk_level(
@@ -313,18 +752,41 @@ def build_risk_report(
 
 
         # ----------------------------------------------------
-        # Collect evidence
+        # Detector names
         # ----------------------------------------------------
 
-        reasons = (
-            user_events["reason"]
+        detectors_triggered = (
+            unique_events[
+                "threat"
+            ]
+            .tolist()
+        )
+
+
+        # ----------------------------------------------------
+        # Evidence
+        # ----------------------------------------------------
+
+        evidence = (
+            unique_events[
+                "reason"
+            ]
             .drop_duplicates()
             .tolist()
         )
 
 
         # ----------------------------------------------------
-        # Create final user report
+        # Add combination evidence
+        # ----------------------------------------------------
+
+        evidence.extend(
+            combination_reasons
+        )
+
+
+        # ----------------------------------------------------
+        # Final user report
         # ----------------------------------------------------
 
         risk_rows.append({
@@ -339,18 +801,24 @@ def build_risk_report(
                 risk_level,
 
             "detector_count":
-                len(unique_threats),
+                len(
+                    detectors_triggered
+                ),
 
             "detectors_triggered":
-                ", ".join(unique_threats),
+                ", ".join(
+                    detectors_triggered
+                ),
 
             "reasons":
-                " | ".join(reasons)
+                " | ".join(
+                    evidence
+                )
         })
 
 
     # ========================================================
-    # CREATE FINAL RISK REPORT
+    # FINAL REPORT
     # ========================================================
 
     risk_report = pd.DataFrame(
@@ -359,14 +827,20 @@ def build_risk_report(
 
 
     # ========================================================
-    # HIGHEST RISK FIRST
+    # SORT BY RISK
     # ========================================================
 
     risk_report = (
         risk_report
         .sort_values(
-            by="risk_score",
-            ascending=False
+            by=[
+                "risk_score",
+                "detector_count"
+            ],
+            ascending=[
+                False,
+                False
+            ]
         )
         .reset_index(
             drop=True
@@ -375,7 +849,7 @@ def build_risk_report(
 
 
     # ========================================================
-    # RETURN RESULTS
+    # RETURN
     # ========================================================
 
     return (
@@ -398,18 +872,17 @@ if __name__ == "__main__":
 
     print("=" * 60)
 
-
     print(
-        "\nRisk weights:"
+        "\nBase detector scores:"
     )
 
-
-    for threat, weight in RISK_WEIGHTS.items():
+    for threat, score in (
+        BASE_SCORES.items()
+    ):
 
         print(
-            f"{threat}: {weight}"
+            f"{threat}: {score}"
         )
-
 
     print(
         "\nRisk engine loaded successfully."
