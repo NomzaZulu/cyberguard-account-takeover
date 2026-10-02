@@ -80,25 +80,56 @@ def detect_password_spraying(
         errors="coerce"
     )
 
+    # --------------------------------------------------------
+    # Only failed login attempts
+    # --------------------------------------------------------
+
     failed = events[
-        events["login_status"].astype(str).str.lower() == "failed"
+        events["login_status"]
+        .astype(str)
+        .str.lower()
+        .eq("failed")
     ].copy()
+
+    failed = failed.dropna(
+        subset=[
+            "timestamp",
+            "ip_address",
+            "user_id"
+        ]
+    )
 
     detections = []
 
-    for ip_address, ip_events in failed.groupby("ip_address"):
+    # --------------------------------------------------------
+    # Analyse each source IP
+    # --------------------------------------------------------
 
-        ip_events = ip_events.sort_values("timestamp")
+    for ip_address, ip_events in failed.groupby(
+        "ip_address"
+    ):
 
-        timestamps = ip_events["timestamp"].tolist()
+        ip_events = ip_events.sort_values(
+            "timestamp"
+        ).reset_index(drop=True)
+
+        timestamps = ip_events[
+            "timestamp"
+        ].tolist()
+
+        # ----------------------------------------------------
+        # Sliding time window
+        # ----------------------------------------------------
 
         for i in range(len(timestamps)):
 
             window_start = timestamps[i]
 
             window_end = (
-                window_start +
-                pd.Timedelta(minutes=window_minutes)
+                window_start
+                + pd.Timedelta(
+                    minutes=window_minutes
+                )
             )
 
             window_events = ip_events[
@@ -107,24 +138,73 @@ def detect_password_spraying(
                 (ip_events["timestamp"] <= window_end)
             ]
 
-            unique_users = (
-                window_events["user_id"].nunique()
+            # ------------------------------------------------
+            # Unique targeted accounts
+            # ------------------------------------------------
+
+            targeted_users = (
+                window_events["user_id"]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
             )
+
+            unique_users = len(
+                targeted_users
+            )
+
+            # ------------------------------------------------
+            # Password spraying threshold
+            # ------------------------------------------------
 
             if unique_users >= min_users:
 
                 detections.append({
+
                     "ip_address": ip_address,
-                    "threat": "Password Spraying",
+
+                    "threat": (
+                        "Password Spraying"
+                    ),
+
                     "targeted_users": unique_users,
-                    "first_attempt": window_events["timestamp"].min(),
-                    "last_attempt": window_events["timestamp"].max(),
+
+                    "targeted_user_ids": (
+                        ", ".join(
+                            targeted_users
+                        )
+                    ),
+
+                    "attempt_count": len(
+                        window_events
+                    ),
+
+                    "first_attempt": (
+                        window_events[
+                            "timestamp"
+                        ].min()
+                    ),
+
+                    "last_attempt": (
+                        window_events[
+                            "timestamp"
+                        ].max()
+                    ),
+
                     "risk": "HIGH"
                 })
 
+                # --------------------------------------------
+                # Stop after first confirmed window for
+                # this IP
+                # --------------------------------------------
+
                 break
 
-    return pd.DataFrame(detections)
+    return pd.DataFrame(
+        detections
+    )
 
 
 # ============================================================
