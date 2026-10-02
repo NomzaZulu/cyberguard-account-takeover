@@ -4,7 +4,8 @@ import pandas as pd
 from account_takeover_engine import (
     detect_multiple_failed_logins,
     detect_password_spraying,
-    detect_unusual_locations
+    detect_unusual_locations,
+    detect_unknown_devices
 )
 
 
@@ -74,22 +75,12 @@ if profiles_file is not None and events_file is not None:
 
     try:
 
-        # ----------------------------------------------------
-        # LOAD DATA
-        # ----------------------------------------------------
-
         profiles = pd.read_csv(profiles_file)
         events = pd.read_csv(events_file)
-
-
-        # ----------------------------------------------------
-        # SUCCESS MESSAGE
-        # ----------------------------------------------------
 
         st.success(
             "Both datasets uploaded successfully."
         )
-
 
         # ====================================================
         # ORGANISATION OVERVIEW
@@ -99,7 +90,6 @@ if profiles_file is not None and events_file is not None:
 
         col1, col2, col3 = st.columns(3)
 
-
         with col1:
 
             st.metric(
@@ -107,14 +97,12 @@ if profiles_file is not None and events_file is not None:
                 len(profiles)
             )
 
-
         with col2:
 
             st.metric(
                 "Login Events",
                 len(events)
             )
-
 
         with col3:
 
@@ -133,13 +121,11 @@ if profiles_file is not None and events_file is not None:
                 suspicious_events
             )
 
-
         # ====================================================
         # DATASET PREVIEW
         # ====================================================
 
         st.markdown("## Dataset Preview")
-
 
         with st.expander(
             "View Organisation Profiles"
@@ -150,7 +136,6 @@ if profiles_file is not None and events_file is not None:
                 use_container_width=True
             )
 
-
         with st.expander(
             "View Login Events"
         ):
@@ -160,19 +145,16 @@ if profiles_file is not None and events_file is not None:
                 use_container_width=True
             )
 
-
         # ====================================================
         # ANALYZE BUTTON
         # ====================================================
 
         st.markdown("## Account Takeover Analysis")
 
-
         analyze_button = st.button(
             "🔍 Analyze Account Activity",
             use_container_width=True
         )
-
 
         if analyze_button:
 
@@ -184,11 +166,9 @@ if profiles_file is not None and events_file is not None:
                 "### Detector 1 — Multiple Failed Login Attempts"
             )
 
-
             failed_login_results = (
                 detect_multiple_failed_logins(events)
             )
-
 
             if failed_login_results.empty:
 
@@ -208,7 +188,6 @@ if profiles_file is not None and events_file is not None:
                     use_container_width=True
                 )
 
-
             # =================================================
             # DETECTOR 2
             # =================================================
@@ -217,11 +196,9 @@ if profiles_file is not None and events_file is not None:
                 "### Detector 2 — Password Spraying"
             )
 
-
             password_spraying_results = (
                 detect_password_spraying(events)
             )
-
 
             if password_spraying_results.empty:
 
@@ -241,7 +218,6 @@ if profiles_file is not None and events_file is not None:
                     use_container_width=True
                 )
 
-
             # =================================================
             # DETECTOR 3
             # =================================================
@@ -250,14 +226,12 @@ if profiles_file is not None and events_file is not None:
                 "### Detector 3 — Unusual Login Location"
             )
 
-
             unusual_location_results = (
                 detect_unusual_locations(
                     events,
                     profiles
                 )
             )
-
 
             if unusual_location_results.empty:
 
@@ -277,13 +251,44 @@ if profiles_file is not None and events_file is not None:
                     use_container_width=True
                 )
 
+            # =================================================
+            # DETECTOR 4
+            # =================================================
+
+            st.markdown(
+                "### Detector 4 — Unknown / New Device"
+            )
+
+            unknown_device_results = (
+                detect_unknown_devices(
+                    events,
+                    profiles
+                )
+            )
+
+            if unknown_device_results.empty:
+
+                st.success(
+                    "No unknown or new devices detected."
+                )
+
+            else:
+
+                st.warning(
+                    f"{len(unknown_device_results)} "
+                    "unknown/new device event(s) detected."
+                )
+
+                st.dataframe(
+                    unknown_device_results,
+                    use_container_width=True
+                )
 
             # =================================================
             # DETECTION SUMMARY
             # =================================================
 
             st.markdown("## Detection Summary")
-
 
             failed_count = len(
                 failed_login_results
@@ -297,11 +302,11 @@ if profiles_file is not None and events_file is not None:
                 unusual_location_results
             )
 
-
-            summary_col1, summary_col2, summary_col3 = (
-                st.columns(3)
+            device_count = len(
+                unknown_device_results
             )
 
+            summary_col1, summary_col2 = st.columns(2)
 
             with summary_col1:
 
@@ -310,22 +315,22 @@ if profiles_file is not None and events_file is not None:
                     failed_count
                 )
 
-
-            with summary_col2:
-
                 st.metric(
                     "Password Spraying",
                     spraying_count
                 )
 
-
-            with summary_col3:
+            with summary_col2:
 
                 st.metric(
                     "Unusual Locations",
                     location_count
                 )
 
+                st.metric(
+                    "Unknown Devices",
+                    device_count
+                )
 
             # =================================================
             # OVERALL STATUS
@@ -333,21 +338,22 @@ if profiles_file is not None and events_file is not None:
 
             st.markdown("## Overall Status")
 
+            total_detections = (
+                failed_count
+                + spraying_count
+                + location_count
+                + device_count
+            )
 
-            if (
-                failed_count > 0
-                or spraying_count > 0
-                or location_count > 0
-            ):
+            if total_detections > 0:
 
                 st.error(
                     "⚠️ Suspicious account activity detected."
                 )
 
                 st.write(
-                    "CyberGuard identified behaviour that "
-                    "matches one or more credential attack "
-                    "indicators."
+                    "CyberGuard identified one or more "
+                    "account-takeover indicators."
                 )
 
             else:
@@ -355,7 +361,6 @@ if profiles_file is not None and events_file is not None:
                 st.success(
                     "✅ No suspicious account activity detected."
                 )
-
 
     except Exception as e:
 
