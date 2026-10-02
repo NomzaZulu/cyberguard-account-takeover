@@ -97,3 +97,65 @@ else:
         print(f"First Attempt:    {detection['first_attempt']}")
         print(f"Last Attempt:     {detection['last_attempt']}")
         print(f"Risk Level:       {detection['risk']}")
+
+
+
+
+
+
+# ============================================================
+# DETECTOR 2: PASSWORD SPRAYING
+# ============================================================
+
+def detect_password_spraying(events, min_users=5, window_minutes=10):
+    """
+    Detect possible password spraying.
+
+    Password spraying is different from repeated failed logins:
+    the same IP attempts authentication against multiple
+    different user accounts within a short time window.
+    """
+
+    events = events.copy()
+    events["timestamp"] = pd.to_datetime(events["timestamp"])
+
+    failed = events[
+        events["login_status"] == "failed"
+    ].copy()
+
+    detections = []
+
+    for ip_address, ip_events in failed.groupby("ip_address"):
+
+        ip_events = ip_events.sort_values("timestamp")
+
+        timestamps = ip_events["timestamp"].tolist()
+
+        for i in range(len(timestamps)):
+
+            window_start = timestamps[i]
+            window_end = window_start + pd.Timedelta(
+                minutes=window_minutes
+            )
+
+            window_events = ip_events[
+                (ip_events["timestamp"] >= window_start) &
+                (ip_events["timestamp"] <= window_end)
+            ]
+
+            unique_users = window_events["user_id"].nunique()
+
+            if unique_users >= min_users:
+
+                detections.append({
+                    "ip_address": ip_address,
+                    "threat": "Password Spraying",
+                    "targeted_users": unique_users,
+                    "first_attempt": window_events["timestamp"].min(),
+                    "last_attempt": window_events["timestamp"].max(),
+                    "risk": "HIGH"
+                })
+
+                break
+
+    return pd.DataFrame(detections)
