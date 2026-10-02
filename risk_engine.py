@@ -26,6 +26,7 @@ RISK_WEIGHTS = {
 # ============================================================
 
 def get_risk_level(score):
+
     if score >= 60:
         return "HIGH"
 
@@ -51,70 +52,103 @@ def build_risk_report(
 
     detections = []
 
-    # --------------------------------------------------------
-    # Detector 1
-    # --------------------------------------------------------
+
+    # ========================================================
+    # DETECTOR 1
+    # Multiple Failed Login Attempts
+    # ========================================================
 
     if not failed_login_results.empty:
 
         for _, row in failed_login_results.iterrows():
 
             detections.append({
+
                 "user_id": row["user_id"],
-                "threat": "Multiple Failed Login Attempts",
-                "weight": RISK_WEIGHTS[
-                    "Multiple Failed Login Attempts"
-                ],
+
+                "threat":
+                    "Multiple Failed Login Attempts",
+
+                "weight":
+                    RISK_WEIGHTS[
+                        "Multiple Failed Login Attempts"
+                    ],
+
                 "reason": (
-                    f'{row["failed_attempts"]} failed '
-                    "login attempts detected"
+                    f'{row["failed_attempts"]} '
+                    f'failed login attempts detected'
                 )
             })
 
 
-# --------------------------------------------------------
-# Detector 2 — Password Spraying
-# --------------------------------------------------------
+    # ========================================================
+    # DETECTOR 2
+    # Password Spraying
+    # ========================================================
 
-if not password_spraying_results.empty:
+    if not password_spraying_results.empty:
 
-    for _, row in password_spraying_results.iterrows():
+        for _, row in password_spraying_results.iterrows():
 
-        targeted_users = str(
-            row["targeted_user_ids"]
-        ).split(", ")
+            # ------------------------------------------------
+            # Get the actual targeted users
+            # ------------------------------------------------
 
-        for user_id in targeted_users:
-
-            detections.append({
-                "user_id": user_id,
-                "threat": "Password Spraying",
-                "weight": RISK_WEIGHTS[
-                    "Password Spraying"
-                ],
-                "reason": (
-                    f'Password spraying detected from '
-                    f'IP {row["ip_address"]}; '
-                    f'{row["targeted_users"]} accounts targeted '
-                    f'within the detection window'
-                )
-            })
+            targeted_users = str(
+                row["targeted_user_ids"]
+            ).split(", ")
 
 
-    # --------------------------------------------------------
-    # Detector 3
-    # --------------------------------------------------------
+            # ------------------------------------------------
+            # Create individual evidence for every
+            # targeted account
+            # ------------------------------------------------
+
+            for user_id in targeted_users:
+
+                detections.append({
+
+                    "user_id": user_id,
+
+                    "threat":
+                        "Password Spraying",
+
+                    "weight":
+                        RISK_WEIGHTS[
+                            "Password Spraying"
+                        ],
+
+                    "reason": (
+                        f'Password spraying detected '
+                        f'from IP {row["ip_address"]}; '
+                        f'{row["targeted_users"]} accounts '
+                        f'targeted within the detection window'
+                    )
+                })
+
+
+    # ========================================================
+    # DETECTOR 3
+    # Unusual Login Location
+    # ========================================================
 
     if not unusual_location_results.empty:
 
         for _, row in unusual_location_results.iterrows():
 
             detections.append({
-                "user_id": row["user_id"],
-                "threat": "Unusual Login Location",
-                "weight": RISK_WEIGHTS[
-                    "Unusual Login Location"
-                ],
+
+                "user_id":
+                    row["user_id"],
+
+                "threat":
+                    "Unusual Login Location",
+
+                "weight":
+                    RISK_WEIGHTS[
+                        "Unusual Login Location"
+                    ],
+
                 "reason": (
                     f'Login detected from '
                     f'{row["detected_location"]}'
@@ -122,20 +156,28 @@ if not password_spraying_results.empty:
             })
 
 
-    # --------------------------------------------------------
-    # Detector 4
-    # --------------------------------------------------------
+    # ========================================================
+    # DETECTOR 4
+    # Unknown / New Device
+    # ========================================================
 
     if not unknown_device_results.empty:
 
         for _, row in unknown_device_results.iterrows():
 
             detections.append({
-                "user_id": row["user_id"],
-                "threat": "Unknown / New Device",
-                "weight": RISK_WEIGHTS[
-                    "Unknown / New Device"
-                ],
+
+                "user_id":
+                    row["user_id"],
+
+                "threat":
+                    "Unknown / New Device",
+
+                "weight":
+                    RISK_WEIGHTS[
+                        "Unknown / New Device"
+                    ],
+
                 "reason": (
                     f'Previously unknown device: '
                     f'{row["detected_device"]}'
@@ -143,20 +185,28 @@ if not password_spraying_results.empty:
             })
 
 
-    # --------------------------------------------------------
-    # Detector 5
-    # --------------------------------------------------------
+    # ========================================================
+    # DETECTOR 5
+    # Suspicious Session Activity
+    # ========================================================
 
     if not suspicious_session_results.empty:
 
         for _, row in suspicious_session_results.iterrows():
 
             detections.append({
-                "user_id": row["user_id"],
-                "threat": "Suspicious Session Activity",
-                "weight": RISK_WEIGHTS[
-                    "Suspicious Session Activity"
-                ],
+
+                "user_id":
+                    row["user_id"],
+
+                "threat":
+                    "Suspicious Session Activity",
+
+                "weight":
+                    RISK_WEIGHTS[
+                        "Suspicious Session Activity"
+                    ],
+
                 "reason": (
                     f'Suspicious session action: '
                     f'{row["session_action"]}'
@@ -164,27 +214,36 @@ if not password_spraying_results.empty:
             })
 
 
-    # --------------------------------------------------------
-    # Detector 6
-    # --------------------------------------------------------
+    # ========================================================
+    # DETECTOR 6
+    # Sudden Account Behaviour Change
+    # ========================================================
 
     if not behaviour_change_results.empty:
 
         for _, row in behaviour_change_results.iterrows():
 
             detections.append({
-                "user_id": row["user_id"],
-                "threat": "Sudden Account Behaviour Change",
-                "weight": RISK_WEIGHTS[
-                    "Sudden Account Behaviour Change"
-                ],
-                "reason": row["indicators"]
+
+                "user_id":
+                    row["user_id"],
+
+                "threat":
+                    "Sudden Account Behaviour Change",
+
+                "weight":
+                    RISK_WEIGHTS[
+                        "Sudden Account Behaviour Change"
+                    ],
+
+                "reason":
+                    row["indicators"]
             })
 
 
-    # --------------------------------------------------------
-    # No detections
-    # --------------------------------------------------------
+    # ========================================================
+    # NO DETECTIONS
+    # ========================================================
 
     if not detections:
 
@@ -194,24 +253,29 @@ if not password_spraying_results.empty:
         )
 
 
+    # ========================================================
+    # CREATE DETECTION DATAFRAME
+    # ========================================================
+
     detections_df = pd.DataFrame(
         detections
     )
 
 
     # ========================================================
-    # USER RISK AGGREGATION
+    # AGGREGATE RISK BY USER
     # ========================================================
 
     risk_rows = []
+
 
     for user_id, user_events in detections_df.groupby(
         "user_id"
     ):
 
-        # ----------------------------------------------
-        # Unique threat types
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Unique detector types
+        # ----------------------------------------------------
 
         unique_threats = (
             user_events["threat"]
@@ -220,18 +284,18 @@ if not password_spraying_results.empty:
         )
 
 
-        # ----------------------------------------------
-        # Raw score
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Calculate raw score
+        # ----------------------------------------------------
 
         raw_score = int(
             user_events["weight"].sum()
         )
 
 
-        # ----------------------------------------------
-        # Cap score at 100
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Limit score to 100
+        # ----------------------------------------------------
 
         score = min(
             raw_score,
@@ -239,18 +303,18 @@ if not password_spraying_results.empty:
         )
 
 
-        # ----------------------------------------------
-        # Risk level
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Determine risk level
+        # ----------------------------------------------------
 
         risk_level = get_risk_level(
             score
         )
 
 
-        # ----------------------------------------------
-        # Reasons
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Collect evidence
+        # ----------------------------------------------------
 
         reasons = (
             user_events["reason"]
@@ -259,38 +323,60 @@ if not password_spraying_results.empty:
         )
 
 
+        # ----------------------------------------------------
+        # Create final user report
+        # ----------------------------------------------------
+
         risk_rows.append({
-            "user_id": user_id,
-            "risk_score": score,
-            "risk_level": risk_level,
-            "detector_count": len(
-                unique_threats
-            ),
-            "detectors_triggered": ", ".join(
-                unique_threats
-            ),
-            "reasons": " | ".join(
-                reasons
-            )
+
+            "user_id":
+                user_id,
+
+            "risk_score":
+                score,
+
+            "risk_level":
+                risk_level,
+
+            "detector_count":
+                len(unique_threats),
+
+            "detectors_triggered":
+                ", ".join(unique_threats),
+
+            "reasons":
+                " | ".join(reasons)
         })
 
+
+    # ========================================================
+    # CREATE FINAL RISK REPORT
+    # ========================================================
 
     risk_report = pd.DataFrame(
         risk_rows
     )
 
 
-    # --------------------------------------------------------
-    # Sort highest risk first
-    # --------------------------------------------------------
+    # ========================================================
+    # HIGHEST RISK FIRST
+    # ========================================================
 
-    risk_report = risk_report.sort_values(
-        by="risk_score",
-        ascending=False
-    ).reset_index(
-        drop=True
+    risk_report = (
+        risk_report
+        .sort_values(
+            by="risk_score",
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
     )
 
+
+    # ========================================================
+    # RETURN RESULTS
+    # ========================================================
 
     return (
         risk_report,
@@ -305,16 +391,25 @@ if not password_spraying_results.empty:
 if __name__ == "__main__":
 
     print("=" * 60)
-    print(" CYBERGUARD RISK ENGINE")
+
+    print(
+        "CYBERGUARD RISK ENGINE"
+    )
+
     print("=" * 60)
 
-    print("\nRisk weights:")
+
+    print(
+        "\nRisk weights:"
+    )
+
 
     for threat, weight in RISK_WEIGHTS.items():
 
         print(
             f"{threat}: {weight}"
         )
+
 
     print(
         "\nRisk engine loaded successfully."
