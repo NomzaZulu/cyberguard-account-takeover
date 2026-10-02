@@ -1149,24 +1149,24 @@ def detect_suspicious_sessions(
 
 def detect_sudden_account_behaviour(
     events,
-    minimum_events=5,
-    activity_multiplier=2.0
+    minimum_events=6,
+    baseline_ratio=0.5,
+    activity_multiplier=2.0,
+    minimum_indicators=1
 ):
     """
-    Detect significant changes in a user's activity
-    compared with their own historical behaviour.
+    Detect significant changes in a user's behaviour.
 
-    IMPORTANT:
-    This detector does NOT use:
+    The detector does NOT use:
         - scenario
         - is_anomaly
 
-    It creates a baseline from each user's earlier activity
-    and compares their later activity against that baseline.
+    A user's earlier activity is used as the baseline.
+    Later activity is compared against that baseline.
 
     Indicators:
         - sudden increase in login activity
-        - sudden increase in failed logins
+        - sudden increase in failed-login rate
         - sudden increase in IP diversity
         - sudden increase in location diversity
         - sudden increase in device diversity
@@ -1174,51 +1174,83 @@ def detect_sudden_account_behaviour(
 
     events = events.copy()
 
+    # ========================================================
+    # PREPARE DATA
+    # ========================================================
+
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
         errors="coerce"
     )
 
     events = events.dropna(
-        subset=["timestamp"]
+        subset=[
+            "timestamp",
+            "user_id"
+        ]
+    ).copy()
+
+    events = events.sort_values(
+        [
+            "user_id",
+            "timestamp"
+        ]
     )
 
     detections = []
 
-    # --------------------------------------------------------
-    # Need enough data to establish a baseline
-    # --------------------------------------------------------
+    # ========================================================
+    # ANALYSE EACH USER
+    # ========================================================
 
     for user_id, user_events in events.groupby(
         "user_id"
     ):
 
-        user_events = user_events.sort_values(
-            "timestamp"
-        ).copy()
+        user_events = (
+            user_events
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
 
-        if len(user_events) < minimum_events * 2:
+        # ----------------------------------------------------
+        # Need enough events
+        # ----------------------------------------------------
+
+        if len(user_events) < minimum_events:
             continue
 
         # ----------------------------------------------------
-        # Split user's activity into:
-        # historical baseline
-        # recent/current activity
+        # Determine baseline/recent split
+        #
+        # Example:
+        # 10 events
+        # baseline = first 5
+        # recent   = last 5
         # ----------------------------------------------------
 
-        midpoint = len(user_events) // 2
+        split_index = max(
+            1,
+            int(
+                len(user_events)
+                * baseline_ratio
+            )
+        )
 
         baseline = user_events.iloc[
-            :midpoint
-        ]
+            :split_index
+        ].copy()
 
         recent = user_events.iloc[
-            midpoint:
-        ]
+            split_index:
+        ].copy()
 
-        # ----------------------------------------------------
-        # Activity volume
-        # ----------------------------------------------------
+        if baseline.empty or recent.empty:
+            continue
+
+        # ====================================================
+        # ACTIVITY VOLUME
+        # ====================================================
 
         baseline_activity = len(
             baseline
@@ -1228,11 +1260,11 @@ def detect_sudden_account_behaviour(
             recent
         )
 
-        # ----------------------------------------------------
-        # Failed login rate
-        # ----------------------------------------------------
+        # ====================================================
+        # FAILED LOGIN RATE
+        # ====================================================
 
-        baseline_failed = (
+        baseline_failed_rate = (
             baseline["login_status"]
             .astype(str)
             .str.lower()
@@ -1240,7 +1272,7 @@ def detect_sudden_account_behaviour(
             .mean()
         )
 
-        recent_failed = (
+        recent_failed_rate = (
             recent["login_status"]
             .astype(str)
             .str.lower()
@@ -1248,146 +1280,231 @@ def detect_sudden_account_behaviour(
             .mean()
         )
 
-        # ----------------------------------------------------
-        # Diversity indicators
-        # ----------------------------------------------------
+        # ====================================================
+        # IP DIVERSITY
+        # ====================================================
 
         baseline_ips = (
-            baseline["ip_address"].nunique()
+            baseline["ip_address"]
+            .dropna()
+            .nunique()
+            if "ip_address" in baseline.columns
+            else 0
         )
 
         recent_ips = (
-            recent["ip_address"].nunique()
+            recent["ip_address"]
+            .dropna()
+            .nunique()
+            if "ip_address" in recent.columns
+            else 0
         )
 
+        # ====================================================
+        # LOCATION DIVERSITY
+        # ====================================================
+
         baseline_locations = (
-            baseline["location"].nunique()
+            baseline["location"]
+            .dropna()
+            .nunique()
+            if "location" in baseline.columns
+            else 0
         )
 
         recent_locations = (
-            recent["location"].nunique()
+            recent["location"]
+            .dropna()
+            .nunique()
+            if "location" in recent.columns
+            else 0
         )
 
+        # ====================================================
+        # DEVICE DIVERSITY
+        # ====================================================
+
         baseline_devices = (
-            baseline["device"].nunique()
+            baseline["device"]
+            .dropna()
+            .nunique()
+            if "device" in baseline.columns
+            else 0
         )
 
         recent_devices = (
-            recent["device"].nunique()
+            recent["device"]
+            .dropna()
+            .nunique()
+            if "device" in recent.columns
+            else 0
         )
 
         indicators = []
 
-        # ----------------------------------------------------
-        # Activity increase
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATOR 1
+        # Sudden increase in activity
+        # ====================================================
 
         if (
             baseline_activity > 0
-            and recent_activity
-            >= baseline_activity * activity_multiplier
+            and
+            recent_activity
+            >= baseline_activity
+            * activity_multiplier
         ):
 
             indicators.append(
                 "Sudden increase in login activity"
             )
 
-        # ----------------------------------------------------
-        # Failed login increase
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATOR 2
+        # Sudden increase in failed logins
+        # ====================================================
+
+        failed_rate_threshold = max(
+            baseline_failed_rate
+            * activity_multiplier,
+            0.30
+        )
 
         if (
-            recent_failed > 0
-            and recent_failed
-            >= max(
-                baseline_failed * activity_multiplier,
-                0.30
-            )
+            recent_failed_rate
+            >= failed_rate_threshold
+            and
+            recent_failed_rate
+            > baseline_failed_rate
         ):
 
             indicators.append(
                 "Sudden increase in failed logins"
             )
 
-        # ----------------------------------------------------
-        # IP diversity increase
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATOR 3
+        # Increased IP diversity
+        # ====================================================
 
         if (
             baseline_ips > 0
-            and recent_ips
-            >= baseline_ips * activity_multiplier
+            and
+            recent_ips
+            >= baseline_ips
+            * activity_multiplier
         ):
 
             indicators.append(
                 "Sudden increase in IP diversity"
             )
 
-        # ----------------------------------------------------
-        # Location diversity increase
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATOR 4
+        # Increased location diversity
+        # ====================================================
 
         if (
             baseline_locations > 0
-            and recent_locations
-            >= baseline_locations * activity_multiplier
+            and
+            recent_locations
+            >= baseline_locations
+            * activity_multiplier
         ):
 
             indicators.append(
                 "Sudden increase in location diversity"
             )
 
-        # ----------------------------------------------------
-        # Device diversity increase
-        # ----------------------------------------------------
+        # ====================================================
+        # INDICATOR 5
+        # Increased device diversity
+        # ====================================================
 
         if (
             baseline_devices > 0
-            and recent_devices
-            >= baseline_devices * activity_multiplier
+            and
+            recent_devices
+            >= baseline_devices
+            * activity_multiplier
         ):
 
             indicators.append(
                 "Sudden increase in device diversity"
             )
 
-        # ----------------------------------------------------
-        # Generate detection
-        # ----------------------------------------------------
+        # ====================================================
+        # GENERATE DETECTION
+        # ====================================================
 
-        if len(indicators) >= 1:
+        if len(indicators) >= minimum_indicators:
 
             risk = "MEDIUM"
 
             if len(indicators) >= 3:
+
                 risk = "HIGH"
 
             detections.append({
-                "user_id": user_id,
-                "threat": "Sudden Account Behaviour Change",
-                "indicators": "; ".join(
-                    indicators
-                ),
-                "baseline_events": baseline_activity,
-                "recent_events": recent_activity,
-                "baseline_failed_rate": round(
-                    baseline_failed,
-                    3
-                ),
-                "recent_failed_rate": round(
-                    recent_failed,
-                    3
-                ),
-                "baseline_ips": baseline_ips,
-                "recent_ips": recent_ips,
-                "baseline_locations": baseline_locations,
-                "recent_locations": recent_locations,
-                "baseline_devices": baseline_devices,
-                "recent_devices": recent_devices,
-                "risk": risk
+
+                "user_id":
+                    user_id,
+
+                "threat":
+                    "Sudden Account Behaviour Change",
+
+                "indicators":
+                    "; ".join(
+                        indicators
+                    ),
+
+                "baseline_events":
+                    baseline_activity,
+
+                "recent_events":
+                    recent_activity,
+
+                "baseline_failed_rate":
+                    round(
+                        baseline_failed_rate,
+                        3
+                    ),
+
+                "recent_failed_rate":
+                    round(
+                        recent_failed_rate,
+                        3
+                    ),
+
+                "baseline_ips":
+                    baseline_ips,
+
+                "recent_ips":
+                    recent_ips,
+
+                "baseline_locations":
+                    baseline_locations,
+
+                "recent_locations":
+                    recent_locations,
+
+                "baseline_devices":
+                    baseline_devices,
+
+                "recent_devices":
+                    recent_devices,
+
+                "risk":
+                    risk
             })
 
-    return pd.DataFrame(detections)
+    # ========================================================
+    # RETURN RESULTS
+    # ========================================================
+
+    return pd.DataFrame(
+        detections
+    )
 
 
 # ============================================================
