@@ -6,7 +6,8 @@ from account_takeover_engine import (
     detect_password_spraying,
     detect_unusual_locations,
     detect_unknown_devices,
-    detect_suspicious_sessions
+    detect_suspicious_sessions,
+    detect_sudden_account_behaviour
 )
 
 
@@ -116,19 +117,9 @@ if profiles_file is not None and events_file is not None:
 
         with col3:
 
-            if "is_anomaly" in events.columns:
-
-                suspicious_events = int(
-                    events["is_anomaly"].sum()
-                )
-
-            else:
-
-                suspicious_events = 0
-
             st.metric(
-                "Suspicious Events",
-                suspicious_events
+                "Data Records",
+                len(events)
             )
 
 
@@ -166,7 +157,6 @@ if profiles_file is not None and events_file is not None:
         st.markdown(
             "## Account Takeover Analysis"
         )
-
 
         analyze_button = st.button(
             "🔍 Analyze Account Activity",
@@ -349,6 +339,40 @@ if profiles_file is not None and events_file is not None:
 
 
             # =================================================
+            # DETECTOR 6
+            # =================================================
+
+            st.markdown(
+                "### Detector 6 — Sudden Account Behaviour Change"
+            )
+
+            behaviour_change_results = (
+                detect_sudden_account_behaviour(
+                    events
+                )
+            )
+
+
+            if behaviour_change_results.empty:
+
+                st.success(
+                    "No significant account behaviour changes detected."
+                )
+
+            else:
+
+                st.warning(
+                    f"{len(behaviour_change_results)} "
+                    "account behaviour change(s) detected."
+                )
+
+                st.dataframe(
+                    behaviour_change_results,
+                    use_container_width=True
+                )
+
+
+            # =================================================
             # DETECTION SUMMARY
             # =================================================
 
@@ -375,6 +399,10 @@ if profiles_file is not None and events_file is not None:
 
             session_count = len(
                 suspicious_session_results
+            )
+
+            behaviour_count = len(
+                behaviour_change_results
             )
 
 
@@ -416,6 +444,11 @@ if profiles_file is not None and events_file is not None:
                     session_count
                 )
 
+                st.metric(
+                    "Behaviour Changes",
+                    behaviour_count
+                )
+
 
             # =================================================
             # OVERALL STATUS
@@ -432,6 +465,7 @@ if profiles_file is not None and events_file is not None:
                 + location_count
                 + device_count
                 + session_count
+                + behaviour_count
             )
 
 
