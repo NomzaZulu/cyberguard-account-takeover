@@ -30,13 +30,13 @@ st.subheader(
 )
 
 st.write(
-    "Upload organisation profile data and login activity "
-    "to analyse suspicious account behaviour."
+    "Analyse organisation login activity and detect "
+    "credential theft and account takeover indicators."
 )
 
 
 # ============================================================
-# FILE UPLOAD SECTION
+# FILE UPLOAD
 # ============================================================
 
 st.markdown("## Upload Data")
@@ -67,7 +67,7 @@ with col2:
 
 
 # ============================================================
-# ANALYSIS
+# MAIN ANALYSIS
 # ============================================================
 
 if profiles_file is not None and events_file is not None:
@@ -79,7 +79,6 @@ if profiles_file is not None and events_file is not None:
         # ----------------------------------------------------
 
         profiles = pd.read_csv(profiles_file)
-
         events = pd.read_csv(events_file)
 
 
@@ -92,9 +91,9 @@ if profiles_file is not None and events_file is not None:
         )
 
 
-        # ----------------------------------------------------
-        # DATASET METRICS
-        # ----------------------------------------------------
+        # ====================================================
+        # ORGANISATION OVERVIEW
+        # ====================================================
 
         st.markdown("## Organisation Overview")
 
@@ -119,21 +118,25 @@ if profiles_file is not None and events_file is not None:
 
         with col3:
 
-            suspicious_events = (
-                events["is_anomaly"].sum()
-                if "is_anomaly" in events.columns
-                else 0
-            )
+            if "is_anomaly" in events.columns:
+
+                suspicious_events = int(
+                    events["is_anomaly"].sum()
+                )
+
+            else:
+
+                suspicious_events = 0
 
             st.metric(
                 "Suspicious Events",
-                int(suspicious_events)
+                suspicious_events
             )
 
 
-        # ----------------------------------------------------
-        # DATA PREVIEW
-        # ----------------------------------------------------
+        # ====================================================
+        # DATASET PREVIEW
+        # ====================================================
 
         st.markdown("## Dataset Preview")
 
@@ -159,7 +162,7 @@ if profiles_file is not None and events_file is not None:
 
 
         # ====================================================
-        # DETECTION BUTTON
+        # ANALYZE BUTTON
         # ====================================================
 
         st.markdown("## Account Takeover Analysis")
@@ -200,7 +203,6 @@ if profiles_file is not None and events_file is not None:
                     "suspicious user(s) detected."
                 )
 
-
                 st.dataframe(
                     failed_login_results,
                     use_container_width=True
@@ -234,7 +236,6 @@ if profiles_file is not None and events_file is not None:
                     "possible password spraying attack(s) detected."
                 )
 
-
                 st.dataframe(
                     password_spraying_results,
                     use_container_width=True
@@ -242,7 +243,43 @@ if profiles_file is not None and events_file is not None:
 
 
             # =================================================
-            # SUMMARY
+            # DETECTOR 3
+            # =================================================
+
+            st.markdown(
+                "### Detector 3 — Unusual Login Location"
+            )
+
+
+            unusual_location_results = (
+                detect_unusual_locations(
+                    events,
+                    profiles
+                )
+            )
+
+
+            if unusual_location_results.empty:
+
+                st.success(
+                    "No unusual login locations detected."
+                )
+
+            else:
+
+                st.warning(
+                    f"{len(unusual_location_results)} "
+                    "unusual login location(s) detected."
+                )
+
+                st.dataframe(
+                    unusual_location_results,
+                    use_container_width=True
+                )
+
+
+            # =================================================
+            # DETECTION SUMMARY
             # =================================================
 
             st.markdown("## Detection Summary")
@@ -256,14 +293,20 @@ if profiles_file is not None and events_file is not None:
                 password_spraying_results
             )
 
+            location_count = len(
+                unusual_location_results
+            )
 
-            summary_col1, summary_col2 = st.columns(2)
+
+            summary_col1, summary_col2, summary_col3 = (
+                st.columns(3)
+            )
 
 
             with summary_col1:
 
                 st.metric(
-                    "Multiple Failed Login Detections",
+                    "Multiple Failed Logins",
                     failed_count
                 )
 
@@ -271,8 +314,16 @@ if profiles_file is not None and events_file is not None:
             with summary_col2:
 
                 st.metric(
-                    "Password Spraying Detections",
+                    "Password Spraying",
                     spraying_count
+                )
+
+
+            with summary_col3:
+
+                st.metric(
+                    "Unusual Locations",
+                    location_count
                 )
 
 
@@ -283,7 +334,11 @@ if profiles_file is not None and events_file is not None:
             st.markdown("## Overall Status")
 
 
-            if failed_count > 0 or spraying_count > 0:
+            if (
+                failed_count > 0
+                or spraying_count > 0
+                or location_count > 0
+            ):
 
                 st.error(
                     "⚠️ Suspicious account activity detected."
@@ -291,13 +346,14 @@ if profiles_file is not None and events_file is not None:
 
                 st.write(
                     "CyberGuard identified behaviour that "
-                    "matches known credential attack patterns."
+                    "matches one or more credential attack "
+                    "indicators."
                 )
 
             else:
 
                 st.success(
-                    "✅ No credential attack patterns detected."
+                    "✅ No suspicious account activity detected."
                 )
 
 
