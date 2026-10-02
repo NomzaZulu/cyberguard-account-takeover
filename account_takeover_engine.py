@@ -369,57 +369,217 @@ def detect_password_spraying(
 # DETECTOR 3: UNUSUAL LOGIN LOCATION
 # ============================================================
 
-def detect_unusual_locations(events, profiles):
+def detect_unusual_locations(
+    events,
+    profiles=None,
+    min_history=3
+):
 
     events = events.copy()
-    profiles = profiles.copy()
+
+    # ========================================================
+    # PREPARE EVENTS
+    # ========================================================
+
+    events["timestamp"] = pd.to_datetime(
+        events["timestamp"],
+        errors="coerce"
+    )
+
+    events = events.dropna(
+        subset=[
+            "timestamp",
+            "user_id",
+            "location"
+        ]
+    ).copy()
+
+    events["location"] = (
+        events["location"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # ========================================================
+    # BUILD PROFILE-BASED LOCATION BASELINE
+    # ========================================================
 
     profile_locations = {}
 
-    for _, profile in profiles.iterrows():
+    if profiles is not None:
 
-        normal_locations = [
-            location.strip()
-            for location in str(
-                profile["normal_locations"]
-            ).split("|")
-            if location.strip()
-        ]
+        profiles = profiles.copy()
 
-        profile_locations[
-            profile["user_id"]
-        ] = normal_locations
+        if (
+            "user_id" in profiles.columns
+            and
+            "normal_locations" in profiles.columns
+        ):
+
+            for _, profile in profiles.iterrows():
+
+                normal_locations = [
+                    location.strip()
+                    for location in str(
+                        profile["normal_locations"]
+                    ).split("|")
+                    if location.strip()
+                ]
+
+                if normal_locations:
+
+                    profile_locations[
+                        str(profile["user_id"])
+                    ] = set(
+                        normal_locations
+                    )
+
+    # ========================================================
+    # SORT HISTORICAL EVENTS
+    # ========================================================
+
+    events = events.sort_values(
+        ["user_id", "timestamp"]
+    ).reset_index(
+        drop=True
+    )
 
     detections = []
 
-    for _, event in events.iterrows():
+    # ========================================================
+    # ANALYSE EACH USER
+    # ========================================================
 
-        user_id = event["user_id"]
+    for user_id, user_events in events.groupby(
+        "user_id"
+    ):
 
-        location = str(
-            event["location"]
-        ).strip()
-
-        normal_locations = profile_locations.get(
-            user_id,
-            []
+        user_events = (
+            user_events
+            .sort_values("timestamp")
+            .reset_index(drop=True)
         )
 
-        if location not in normal_locations:
+        user_id = str(user_id)
 
-            detections.append({
-                "event_id": event["event_id"],
-                "user_id": user_id,
-                "threat": "Unusual Login Location",
-                "detected_location": location,
-                "normal_locations": ", ".join(
-                    normal_locations
-                ),
-                "timestamp": event["timestamp"],
-                "risk": "MEDIUM"
-            })
+        profile_baseline = profile_locations.get(
+            user_id,
+            set()
+        )
 
-    return pd.DataFrame(detections)
+        # ====================================================
+        # CHECK EACH LOGIN
+        # ====================================================
+
+        for i, event in user_events.iterrows():
+
+            current_location = (
+                str(event["location"]).strip()
+            )
+
+            # ------------------------------------------------
+            # MODE 1:
+            # Organisation profile has a known baseline
+            # ------------------------------------------------
+
+            if profile_baseline:
+
+                known_locations = profile_baseline
+
+                baseline_source = (
+                    "Organisation profile"
+                )
+
+            # ------------------------------------------------
+            # MODE 2:
+            # Learn baseline from historical events
+            # ------------------------------------------------
+
+            else:
+
+                historical_events = (
+                    user_events.iloc[:i]
+                )
+
+                historical_locations = (
+                    historical_events["location"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                )
+
+                location_counts = (
+                    historical_locations
+                    .value_counts()
+                )
+
+                known_locations = set(
+                    location_counts.index
+                )
+
+                baseline_source = (
+                    "Historical user activity"
+                )
+
+            # ------------------------------------------------
+            # Not enough history?
+            # ------------------------------------------------
+
+            if (
+                not profile_baseline
+                and
+                i < min_history
+            ):
+
+                continue
+
+            # ------------------------------------------------
+            # Compare current location
+            # ------------------------------------------------
+
+            if current_location not in known_locations:
+
+                detections.append({
+
+                    "event_id":
+                        event["event_id"],
+
+                    "user_id":
+                        user_id,
+
+                    "threat":
+                        "Unusual Login Location",
+
+                    "detected_location":
+                        current_location,
+
+                    "normal_locations":
+                        ", ".join(
+                            sorted(
+                                known_locations
+                            )
+                        ),
+
+                    "baseline_source":
+                        baseline_source,
+
+                    "historical_events":
+                        i,
+
+                    "timestamp":
+                        event["timestamp"],
+
+                    "risk":
+                        "MEDIUM"
+                })
+
+    # ========================================================
+    # RETURN RESULTS
+    # ========================================================
+
+    return pd.DataFrame(
+        detections
+    )
 
 
 # ============================================================
