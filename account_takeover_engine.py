@@ -247,24 +247,6 @@ def detect_unknown_devices(events, profiles):
 
 def detect_suspicious_sessions(events):
 
-    """
-    Detect suspicious session activity using observed
-    session behaviour.
-
-    IMPORTANT:
-    This function does NOT use:
-        - scenario
-        - is_anomaly
-
-    It uses:
-        - session_id
-        - session_action
-        - login_status
-        - device
-        - location
-        - timestamp
-    """
-
     events = events.copy()
 
     events["timestamp"] = pd.to_datetime(
@@ -273,10 +255,6 @@ def detect_suspicious_sessions(events):
     )
 
     detections = []
-
-    # --------------------------------------------------------
-    # Make sure required column exists
-    # --------------------------------------------------------
 
     if "session_action" not in events.columns:
 
@@ -294,20 +272,12 @@ def detect_suspicious_sessions(events):
             ]
         )
 
-    # --------------------------------------------------------
-    # Normalise session actions
-    # --------------------------------------------------------
-
     events["session_action"] = (
         events["session_action"]
         .astype(str)
         .str.strip()
         .str.lower()
     )
-
-    # --------------------------------------------------------
-    # Actions that deserve session investigation
-    # --------------------------------------------------------
 
     suspicious_actions = {
         "session_change",
@@ -320,15 +290,10 @@ def detect_suspicious_sessions(events):
         )
     ].copy()
 
-    # --------------------------------------------------------
-    # Analyse suspicious session actions
-    # --------------------------------------------------------
-
     for _, event in suspicious_action_events.iterrows():
 
         risk = "MEDIUM"
 
-        # Privileged action is more sensitive
         if event["session_action"] == "privileged_action":
             risk = "HIGH"
 
@@ -348,13 +313,262 @@ def detect_suspicious_sessions(events):
 
 
 # ============================================================
-# OPTIONAL DIRECT TEST
+# DETECTOR 6: SUDDEN ACCOUNT BEHAVIOUR CHANGE
+# ============================================================
+
+def detect_sudden_account_behaviour(
+    events,
+    minimum_events=5,
+    activity_multiplier=2.0
+):
+    """
+    Detect significant changes in a user's activity
+    compared with their own historical behaviour.
+
+    IMPORTANT:
+    This detector does NOT use:
+        - scenario
+        - is_anomaly
+
+    It creates a baseline from each user's earlier activity
+    and compares their later activity against that baseline.
+
+    Indicators:
+        - sudden increase in login activity
+        - sudden increase in failed logins
+        - sudden increase in IP diversity
+        - sudden increase in location diversity
+        - sudden increase in device diversity
+    """
+
+    events = events.copy()
+
+    events["timestamp"] = pd.to_datetime(
+        events["timestamp"],
+        errors="coerce"
+    )
+
+    events = events.dropna(
+        subset=["timestamp"]
+    )
+
+    detections = []
+
+    # --------------------------------------------------------
+    # Need enough data to establish a baseline
+    # --------------------------------------------------------
+
+    for user_id, user_events in events.groupby(
+        "user_id"
+    ):
+
+        user_events = user_events.sort_values(
+            "timestamp"
+        ).copy()
+
+        if len(user_events) < minimum_events * 2:
+            continue
+
+        # ----------------------------------------------------
+        # Split user's activity into:
+        # historical baseline
+        # recent/current activity
+        # ----------------------------------------------------
+
+        midpoint = len(user_events) // 2
+
+        baseline = user_events.iloc[
+            :midpoint
+        ]
+
+        recent = user_events.iloc[
+            midpoint:
+        ]
+
+        # ----------------------------------------------------
+        # Activity volume
+        # ----------------------------------------------------
+
+        baseline_activity = len(
+            baseline
+        )
+
+        recent_activity = len(
+            recent
+        )
+
+        # ----------------------------------------------------
+        # Failed login rate
+        # ----------------------------------------------------
+
+        baseline_failed = (
+            baseline["login_status"]
+            .astype(str)
+            .str.lower()
+            .eq("failed")
+            .mean()
+        )
+
+        recent_failed = (
+            recent["login_status"]
+            .astype(str)
+            .str.lower()
+            .eq("failed")
+            .mean()
+        )
+
+        # ----------------------------------------------------
+        # Diversity indicators
+        # ----------------------------------------------------
+
+        baseline_ips = (
+            baseline["ip_address"].nunique()
+        )
+
+        recent_ips = (
+            recent["ip_address"].nunique()
+        )
+
+        baseline_locations = (
+            baseline["location"].nunique()
+        )
+
+        recent_locations = (
+            recent["location"].nunique()
+        )
+
+        baseline_devices = (
+            baseline["device"].nunique()
+        )
+
+        recent_devices = (
+            recent["device"].nunique()
+        )
+
+        indicators = []
+
+        # ----------------------------------------------------
+        # Activity increase
+        # ----------------------------------------------------
+
+        if (
+            baseline_activity > 0
+            and recent_activity
+            >= baseline_activity * activity_multiplier
+        ):
+
+            indicators.append(
+                "Sudden increase in login activity"
+            )
+
+        # ----------------------------------------------------
+        # Failed login increase
+        # ----------------------------------------------------
+
+        if (
+            recent_failed > 0
+            and recent_failed
+            >= max(
+                baseline_failed * activity_multiplier,
+                0.30
+            )
+        ):
+
+            indicators.append(
+                "Sudden increase in failed logins"
+            )
+
+        # ----------------------------------------------------
+        # IP diversity increase
+        # ----------------------------------------------------
+
+        if (
+            baseline_ips > 0
+            and recent_ips
+            >= baseline_ips * activity_multiplier
+        ):
+
+            indicators.append(
+                "Sudden increase in IP diversity"
+            )
+
+        # ----------------------------------------------------
+        # Location diversity increase
+        # ----------------------------------------------------
+
+        if (
+            baseline_locations > 0
+            and recent_locations
+            >= baseline_locations * activity_multiplier
+        ):
+
+            indicators.append(
+                "Sudden increase in location diversity"
+            )
+
+        # ----------------------------------------------------
+        # Device diversity increase
+        # ----------------------------------------------------
+
+        if (
+            baseline_devices > 0
+            and recent_devices
+            >= baseline_devices * activity_multiplier
+        ):
+
+            indicators.append(
+                "Sudden increase in device diversity"
+            )
+
+        # ----------------------------------------------------
+        # Generate detection
+        # ----------------------------------------------------
+
+        if len(indicators) >= 1:
+
+            risk = "MEDIUM"
+
+            if len(indicators) >= 3:
+                risk = "HIGH"
+
+            detections.append({
+                "user_id": user_id,
+                "threat": "Sudden Account Behaviour Change",
+                "indicators": "; ".join(
+                    indicators
+                ),
+                "baseline_events": baseline_activity,
+                "recent_events": recent_activity,
+                "baseline_failed_rate": round(
+                    baseline_failed,
+                    3
+                ),
+                "recent_failed_rate": round(
+                    recent_failed,
+                    3
+                ),
+                "baseline_ips": baseline_ips,
+                "recent_ips": recent_ips,
+                "baseline_locations": baseline_locations,
+                "recent_locations": recent_locations,
+                "baseline_devices": baseline_devices,
+                "recent_devices": recent_devices,
+                "risk": risk
+            })
+
+    return pd.DataFrame(detections)
+
+
+# ============================================================
+# DIRECT ENGINE TEST
 # ============================================================
 
 if __name__ == "__main__":
 
     print("=" * 60)
-    print(" CYBERGUARD ACCOUNT TAKEOVER DETECTION ENGINE")
+    print(
+        " CYBERGUARD ACCOUNT TAKEOVER DETECTION ENGINE"
+    )
     print("=" * 60)
 
     try:
@@ -458,21 +672,35 @@ if __name__ == "__main__":
         )
 
         # ----------------------------------------------------
-        # Display Detector 5 results
+        # Detector 6
         # ----------------------------------------------------
 
-        if not result_5.empty:
+        result_6 = detect_sudden_account_behaviour(
+            events
+        )
 
-            print("\nSuspicious sessions:")
+        print(
+            "\n[6] Sudden Account Behaviour Change"
+        )
+
+        print(
+            f"Detections: {len(result_6)}"
+        )
+
+        if not result_6.empty:
 
             print(
-                result_5.to_string(
+                "\nBehaviour change detections:"
+            )
+
+            print(
+                result_6.to_string(
                     index=False
                 )
             )
 
         # ----------------------------------------------------
-        # Summary
+        # Final summary
         # ----------------------------------------------------
 
         print("\n" + "=" * 60)
@@ -480,26 +708,32 @@ if __name__ == "__main__":
         print("=" * 60)
 
         print(
-            f"\nMultiple failed logins : {len(result_1)}"
+            f"\n1. Multiple failed logins : {len(result_1)}"
         )
 
         print(
-            f"Password spraying      : {len(result_2)}"
+            f"2. Password spraying      : {len(result_2)}"
         )
 
         print(
-            f"Unusual locations      : {len(result_3)}"
+            f"3. Unusual locations      : {len(result_3)}"
         )
 
         print(
-            f"Unknown devices        : {len(result_4)}"
+            f"4. Unknown devices        : {len(result_4)}"
         )
 
         print(
-            f"Suspicious sessions    : {len(result_5)}"
+            f"5. Suspicious sessions    : {len(result_5)}"
         )
 
-        print("\nEngine test completed.")
+        print(
+            f"6. Behaviour changes      : {len(result_6)}"
+        )
+
+        print(
+            "\nAll six detectors executed."
+        )
 
     except FileNotFoundError as e:
 
