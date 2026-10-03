@@ -1,1004 +1,1037 @@
 import pandas as pd
+import numpy as np
 
 
 # ============================================================
-# RISK LEVEL THRESHOLDS
+# CYBERGUARD RISK ENGINE
+# ============================================================
+#
+# Purpose:
+#   Combine individual Account Takeover detections into
+#   an account-level risk assessment.
+#
+# Important:
+#   This engine does NOT use:
+#       - scenario
+#       - is_anomaly
+#       - attack_type
+#
+#   Risk is calculated only from detector evidence.
+#
 # ============================================================
 
-LOW_THRESHOLD = 30
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 HIGH_THRESHOLD = 70
+MEDIUM_THRESHOLD = 40
 
 
 # ============================================================
-# DETECTOR BASE WEIGHTS
+# DETECTOR WEIGHTS
 # ============================================================
 
 DETECTOR_WEIGHTS = {
 
-    # Strong authentication attack
-    "Multiple Failed Login Attempts": 22,
+    "Multiple Failed Login Attempts": 20,
 
-    # Stronger because multiple accounts are targeted
-    "Password Spraying": 28,
+    "Password Spraying": 25,
 
-    # Contextual signal
-    "Unusual Login Location": 14,
+    "Unusual Login Location": 15,
 
-    # Contextual signal
-    "Unknown / New Device": 14,
+    "Unknown / New Device": 15,
 
-    # Potentially serious depending on action
-    "Suspicious Session Activity": 22,
+    "Suspicious Session Activity": 25,
 
-    # Behavioural anomaly
-    "Sudden Account Behaviour Change": 18
+    "Sudden Account Behaviour Change": 20,
+
 }
 
 
 # ============================================================
-# HELPER
+# RISK LEVEL
 # ============================================================
 
-def safe_int(value, default=0):
+def get_risk_level(score):
 
-    try:
-        if pd.isna(value):
-            return default
+    if score >= HIGH_THRESHOLD:
+        return "HIGH"
 
-        return int(float(value))
+    if score >= MEDIUM_THRESHOLD:
+        return "MEDIUM"
 
-    except Exception:
-        return default
-
-
-def safe_float(value, default=0.0):
-
-    try:
-        if pd.isna(value):
-            return default
-
-        return float(value)
-
-    except Exception:
-        return default
+    return "LOW"
 
 
 # ============================================================
-# NORMALISE DETECTION DATA
+# NORMALIZE RISK
 # ============================================================
 
-def normalise_detection(
-    dataframe,
-    threat_name
-):
+def normalize_risk(value):
 
-    if dataframe is None:
-        return pd.DataFrame()
+    value = str(value).strip().upper()
 
-    if not isinstance(
-        dataframe,
-        pd.DataFrame
-    ):
-        return pd.DataFrame()
+    if value in {"HIGH", "MEDIUM", "LOW"}:
+        return value
 
-    if dataframe.empty:
-        return pd.DataFrame()
-
-    df = dataframe.copy()
-
-    if "user_id" not in df.columns:
-        return pd.DataFrame()
-
-    df["threat"] = threat_name
-
-    return df
+    return "LOW"
 
 
 # ============================================================
-# CALCULATE INDIVIDUAL DETECTOR SCORE
+# DETECTOR WEIGHT
 # ============================================================
 
-def calculate_detector_score(
-    threat,
-    detection
-):
+def get_detector_weight(threat):
 
-    base_score = DETECTOR_WEIGHTS.get(
-        threat,
+    return DETECTOR_WEIGHTS.get(
+        str(threat).strip(),
         10
     )
 
-    evidence_bonus = 0
+
+# ============================================================
+# EVIDENCE BONUS
+# ============================================================
+
+def calculate_evidence_bonus(detection):
+
+    bonus = 0
+
+    threat = str(
+        detection.get("threat", "")
+    ).strip()
+
+    risk = normalize_risk(
+        detection.get("risk", "LOW")
+    )
 
     # --------------------------------------------------------
-    # MULTIPLE FAILED LOGINS
+    # Base risk bonus
+    # --------------------------------------------------------
+
+    if risk == "HIGH":
+        bonus += 10
+
+    elif risk == "MEDIUM":
+        bonus += 5
+
+    # --------------------------------------------------------
+    # Multiple failed logins
     # --------------------------------------------------------
 
     if threat == "Multiple Failed Login Attempts":
 
-        failed_attempts = safe_int(
-            detection.get(
-                "failed_attempts",
-                0
-            )
+        attempts = detection.get(
+            "failed_attempts",
+            0
         )
 
-        if failed_attempts >= 10:
-            evidence_bonus += 10
+        try:
+            attempts = int(attempts)
+        except:
+            attempts = 0
 
-        elif failed_attempts >= 7:
-            evidence_bonus += 7
+        if attempts >= 10:
+            bonus += 8
 
-        elif failed_attempts >= 5:
-            evidence_bonus += 4
+        elif attempts >= 7:
+            bonus += 5
 
+        elif attempts >= 5:
+            bonus += 2
 
     # --------------------------------------------------------
-    # PASSWORD SPRAYING
+    # Password spraying
     # --------------------------------------------------------
 
-    elif threat == "Password Spraying":
+    if threat == "Password Spraying":
 
-        targeted_users = safe_int(
-            detection.get(
-                "targeted_users",
-                0
-            )
+        users = detection.get(
+            "targeted_users",
+            0
         )
 
-        if targeted_users >= 15:
-            evidence_bonus += 12
+        try:
+            users = int(users)
+        except:
+            users = 0
 
-        elif targeted_users >= 10:
-            evidence_bonus += 9
+        if users >= 15:
+            bonus += 10
 
-        elif targeted_users >= 7:
-            evidence_bonus += 6
+        elif users >= 10:
+            bonus += 7
 
-        elif targeted_users >= 5:
-            evidence_bonus += 3
-
-
-    # --------------------------------------------------------
-    # UNUSUAL LOCATION
-    # --------------------------------------------------------
-
-    elif threat == "Unusual Login Location":
-
-        # Location alone is contextual.
-        # It should not create a huge score.
-        evidence_bonus += 0
-
+        elif users >= 5:
+            bonus += 3
 
     # --------------------------------------------------------
-    # UNKNOWN DEVICE
+    # Sudden behaviour change
     # --------------------------------------------------------
 
-    elif threat == "Unknown / New Device":
+    if threat == "Sudden Account Behaviour Change":
 
-        # New device alone is weak/moderate evidence.
-        evidence_bonus += 0
-
-
-    # --------------------------------------------------------
-    # SUSPICIOUS SESSION
-    # --------------------------------------------------------
-
-    elif threat == "Suspicious Session Activity":
-
-        action = str(
-            detection.get(
-                "session_action",
-                ""
-            )
-        ).lower()
-
-        if action == "privileged_action":
-
-            evidence_bonus += 12
-
-        elif action == "session_change":
-
-            evidence_bonus += 4
-
-
-    # --------------------------------------------------------
-    # BEHAVIOUR CHANGE
-    # --------------------------------------------------------
-
-    elif threat == "Sudden Account Behaviour Change":
-
-        indicator_text = str(
+        indicators = str(
             detection.get(
                 "indicators",
                 ""
             )
         )
 
-        indicator_count = len(
-            [
-                x
-                for x in indicator_text.split(";")
+        if indicators.strip():
+
+            indicator_count = len([
+                x for x in indicators.split(";")
                 if x.strip()
-            ]
-        )
+            ])
 
-        if indicator_count >= 4:
+            if indicator_count >= 4:
+                bonus += 10
 
-            evidence_bonus += 10
+            elif indicator_count >= 3:
+                bonus += 7
 
-        elif indicator_count >= 3:
+            elif indicator_count >= 2:
+                bonus += 4
 
-            evidence_bonus += 7
+            elif indicator_count >= 1:
+                bonus += 2
 
-        elif indicator_count >= 2:
+    # --------------------------------------------------------
+    # Suspicious session
+    # --------------------------------------------------------
 
-            evidence_bonus += 4
+    if threat == "Suspicious Session Activity":
 
-        elif indicator_count >= 1:
+        action = str(
+            detection.get(
+                "session_action",
+                ""
+            )
+        ).strip().lower()
 
-            evidence_bonus += 2
+        if action == "privileged_action":
+            bonus += 10
+
+        elif action == "session_change":
+            bonus += 3
+
+    return bonus
 
 
-    raw_score = (
-        base_score +
-        evidence_bonus
+# ============================================================
+# REPEATED EVIDENCE BONUS
+# ============================================================
+#
+# Important:
+# Repeated detections should increase confidence, but should
+# NOT allow one noisy detector to dominate the whole score.
+#
+# Therefore the bonus uses diminishing returns and a cap.
+#
+# Example:
+#
+#   1 detection  -> 0 bonus
+#   2 detections -> +3
+#   3 detections -> +5
+#   4 detections -> +7
+#   5+           -> capped at +10
+#
+# ============================================================
+
+def calculate_repetition_bonus(
+    detection_count,
+    max_bonus=10
+):
+
+    try:
+        count = int(detection_count)
+
+    except:
+        count = 0
+
+    if count <= 1:
+        return 0
+
+    if count == 2:
+        return 3
+
+    if count == 3:
+        return 5
+
+    if count == 4:
+        return 7
+
+    return min(
+        max_bonus,
+        7 + min(count - 4, 3)
     )
-
-    return {
-        "base_score": base_score,
-        "evidence_bonus": evidence_bonus,
-        "score_contribution": raw_score
-    }
 
 
 # ============================================================
 # CORRELATION BONUS
 # ============================================================
+#
+# Multiple independent indicators are stronger than repeated
+# instances of one indicator.
+#
+# ============================================================
 
-def calculate_correlation_bonus(
-    threats
-):
+def calculate_correlation_bonus(threats):
 
-    threat_set = set(
-        threats
-    )
+    threat_set = set(threats)
 
     bonus = 0
 
-    correlation_reasons = []
-
-
     # --------------------------------------------------------
-    # PASSWORD SPRAYING + NEW DEVICE
+    # Credential attack chain
     # --------------------------------------------------------
 
     if (
-        "Password Spraying" in threat_set
+        "Multiple Failed Login Attempts"
+        in threat_set
         and
-        "Unknown / New Device" in threat_set
-    ):
-
-        bonus += 8
-
-        correlation_reasons.append(
-            "Password spraying combined with a new device"
-        )
-
-
-    # --------------------------------------------------------
-    # PASSWORD SPRAYING + LOCATION
-    # --------------------------------------------------------
-
-    if (
-        "Password Spraying" in threat_set
-        and
-        "Unusual Login Location" in threat_set
-    ):
-
-        bonus += 8
-
-        correlation_reasons.append(
-            "Password spraying combined with an unusual location"
-        )
-
-
-    # --------------------------------------------------------
-    # FAILED LOGINS + NEW DEVICE
-    # --------------------------------------------------------
-
-    if (
-        "Multiple Failed Login Attempts" in threat_set
-        and
-        "Unknown / New Device" in threat_set
-    ):
-
-        bonus += 5
-
-        correlation_reasons.append(
-            "Repeated failed logins combined with a new device"
-        )
-
-
-    # --------------------------------------------------------
-    # FAILED LOGINS + LOCATION
-    # --------------------------------------------------------
-
-    if (
-        "Multiple Failed Login Attempts" in threat_set
-        and
-        "Unusual Login Location" in threat_set
-    ):
-
-        bonus += 5
-
-        correlation_reasons.append(
-            "Repeated failed logins combined with an unusual location"
-        )
-
-
-    # --------------------------------------------------------
-    # LOCATION + DEVICE
-    # --------------------------------------------------------
-
-    if (
-        "Unusual Login Location" in threat_set
-        and
-        "Unknown / New Device" in threat_set
-    ):
-
-        bonus += 7
-
-        correlation_reasons.append(
-            "Unusual location combined with a new device"
-        )
-
-
-    # --------------------------------------------------------
-    # SUSPICIOUS SESSION + DEVICE
-    # --------------------------------------------------------
-
-    if (
-        "Suspicious Session Activity" in threat_set
-        and
-        "Unknown / New Device" in threat_set
-    ):
-
-        bonus += 8
-
-        correlation_reasons.append(
-            "Suspicious session activity combined with a new device"
-        )
-
-
-    # --------------------------------------------------------
-    # SUSPICIOUS SESSION + LOCATION
-    # --------------------------------------------------------
-
-    if (
-        "Suspicious Session Activity" in threat_set
-        and
-        "Unusual Login Location" in threat_set
-    ):
-
-        bonus += 8
-
-        correlation_reasons.append(
-            "Suspicious session activity combined with an unusual location"
-        )
-
-
-    # --------------------------------------------------------
-    # STRONG ATTACK CHAIN
-    # --------------------------------------------------------
-
-    strong_attack_signals = {
-        "Multiple Failed Login Attempts",
-        "Password Spraying",
         "Unknown / New Device"
-    }
-
-    if strong_attack_signals.issubset(
-        threat_set
+        in threat_set
     ):
-
         bonus += 8
 
-        correlation_reasons.append(
-            "Multiple authentication attack signals detected together"
-        )
-
-
     # --------------------------------------------------------
-    # SESSION + MULTIPLE ATTACK SIGNALS
-    # --------------------------------------------------------
-
-    attack_signals = {
-        "Multiple Failed Login Attempts",
-        "Password Spraying",
-        "Suspicious Session Activity"
-    }
-
-    if attack_signals.issubset(
-        threat_set
-    ):
-
-        bonus += 10
-
-        correlation_reasons.append(
-            "Authentication attack indicators combined with suspicious session activity"
-        )
-
-
-    # --------------------------------------------------------
-    # BEHAVIOUR CHANGE CORROBORATION
+    # Location + device anomaly
     # --------------------------------------------------------
 
     if (
-        "Sudden Account Behaviour Change" in threat_set
-        and len(threat_set) >= 3
+        "Unusual Login Location"
+        in threat_set
+        and
+        "Unknown / New Device"
+        in threat_set
     ):
+        bonus += 8
 
+    # --------------------------------------------------------
+    # Password spraying + suspicious session
+    # --------------------------------------------------------
+
+    if (
+        "Password Spraying"
+        in threat_set
+        and
+        "Suspicious Session Activity"
+        in threat_set
+    ):
+        bonus += 12
+
+    # --------------------------------------------------------
+    # Failed logins + unusual location
+    # --------------------------------------------------------
+
+    if (
+        "Multiple Failed Login Attempts"
+        in threat_set
+        and
+        "Unusual Login Location"
+        in threat_set
+    ):
         bonus += 6
 
-        correlation_reasons.append(
-            "Behavioural change corroborates other suspicious activity"
+    # --------------------------------------------------------
+    # Behaviour change + unknown device
+    # --------------------------------------------------------
+
+    if (
+        "Sudden Account Behaviour Change"
+        in threat_set
+        and
+        "Unknown / New Device"
+        in threat_set
+    ):
+        bonus += 8
+
+    # --------------------------------------------------------
+    # Behaviour change + unusual location
+    # --------------------------------------------------------
+
+    if (
+        "Sudden Account Behaviour Change"
+        in threat_set
+        and
+        "Unusual Login Location"
+        in threat_set
+    ):
+        bonus += 6
+
+    # --------------------------------------------------------
+    # Three or more independent detector types
+    # --------------------------------------------------------
+
+    if len(threat_set) >= 3:
+        bonus += 10
+
+    # --------------------------------------------------------
+    # Four or more independent detector types
+    # --------------------------------------------------------
+
+    if len(threat_set) >= 4:
+        bonus += 8
+
+    return bonus
+
+
+# ============================================================
+# CAP SCORE
+# ============================================================
+
+def cap_score(score):
+
+    return min(
+        100,
+        max(
+            0,
+            round(score)
         )
-
-
-    return bonus, correlation_reasons
+    )
 
 
 # ============================================================
-# BUILD RISK REPORT
+# BUILD EVIDENCE DESCRIPTION
 # ============================================================
 
-def build_risk_report(
-    failed_login_results,
-    password_spraying_results,
-    unusual_location_results,
-    unknown_device_results,
-    suspicious_session_results,
-    behaviour_change_results
+def build_evidence_description(
+    detection
 ):
 
-    # ========================================================
-    # NORMALISE ALL DETECTORS
-    # ========================================================
-
-    detector_frames = [
-
-        normalise_detection(
-            failed_login_results,
-            "Multiple Failed Login Attempts"
-        ),
-
-        normalise_detection(
-            password_spraying_results,
-            "Password Spraying"
-        ),
-
-        normalise_detection(
-            unusual_location_results,
-            "Unusual Login Location"
-        ),
-
-        normalise_detection(
-            unknown_device_results,
-            "Unknown / New Device"
-        ),
-
-        normalise_detection(
-            suspicious_session_results,
-            "Suspicious Session Activity"
-        ),
-
-        normalise_detection(
-            behaviour_change_results,
-            "Sudden Account Behaviour Change"
+    threat = str(
+        detection.get(
+            "threat",
+            "Unknown Threat"
         )
-    ]
+    )
 
+    risk = normalize_risk(
+        detection.get(
+            "risk",
+            "LOW"
+        )
+    )
 
-    detector_frames = [
-        df
-        for df in detector_frames
-        if not df.empty
-    ]
+    details = []
 
+    # --------------------------------------------------------
+    # Failed logins
+    # --------------------------------------------------------
 
-    # ========================================================
-    # NOTHING DETECTED
-    # ========================================================
+    if threat == "Multiple Failed Login Attempts":
 
-    if not detector_frames:
+        attempts = detection.get(
+            "failed_attempts"
+        )
+
+        if pd.notna(attempts):
+
+            details.append(
+                f"{attempts} failed login attempts"
+            )
+
+    # --------------------------------------------------------
+    # Password spraying
+    # --------------------------------------------------------
+
+    if threat == "Password Spraying":
+
+        users = detection.get(
+            "targeted_users"
+        )
+
+        if pd.notna(users):
+
+            details.append(
+                f"{users} targeted users"
+            )
+
+    # --------------------------------------------------------
+    # Unusual location
+    # --------------------------------------------------------
+
+    if threat == "Unusual Login Location":
+
+        location = detection.get(
+            "detected_location"
+        )
+
+        if pd.notna(location):
+
+            details.append(
+                f"login from {location}"
+            )
+
+    # --------------------------------------------------------
+    # Unknown device
+    # --------------------------------------------------------
+
+    if threat == "Unknown / New Device":
+
+        device = detection.get(
+            "detected_device"
+        )
+
+        if pd.notna(device):
+
+            details.append(
+                f"device {device}"
+            )
+
+    # --------------------------------------------------------
+    # Suspicious session
+    # --------------------------------------------------------
+
+    if threat == "Suspicious Session Activity":
+
+        action = detection.get(
+            "session_action"
+        )
+
+        if pd.notna(action):
+
+            details.append(
+                f"session action: {action}"
+            )
+
+    # --------------------------------------------------------
+    # Behaviour change
+    # --------------------------------------------------------
+
+    if threat == "Sudden Account Behaviour Change":
+
+        indicators = detection.get(
+            "indicators"
+        )
+
+        if pd.notna(indicators):
+
+            details.append(
+                str(indicators)
+            )
+
+    # --------------------------------------------------------
+    # Final description
+    # --------------------------------------------------------
+
+    if details:
 
         return (
-            pd.DataFrame(
-                columns=[
-                    "user_id",
-                    "risk_score",
-                    "risk_level",
-                    "detector_count",
-                    "detectors_triggered",
-                    "reasons"
-                ]
-            ),
-            pd.DataFrame()
+            f"{threat} ({risk}): "
+            + "; ".join(details)
         )
 
-
-    # ========================================================
-    # COMBINE DETECTIONS
-    # ========================================================
-
-    combined = pd.concat(
-        detector_frames,
-        ignore_index=True,
-        sort=False
+    return (
+        f"{threat} ({risk})"
     )
 
 
-    # ========================================================
-    # BUILD USER REPORT
-    # ========================================================
+# ============================================================
+# ACCOUNT RISK CALCULATION
+# ============================================================
 
-    reports = []
+def calculate_account_risk(
+    user_events
+):
 
-    detection_details = []
+    if user_events is None:
 
+        return {
+            "risk_score": 0,
+            "risk_level": "LOW",
+            "detections": 0,
+            "detector_types": 0,
+            "evidence": [],
+            "reasons": []
+        }
 
-    for user_id, user_events in combined.groupby(
-        "user_id"
+    if not isinstance(
+        user_events,
+        pd.DataFrame
     ):
 
-        # ----------------------------------------------------
-        # Remove duplicate detector occurrences
-        # ----------------------------------------------------
-
-        unique_detections = (
+        user_events = pd.DataFrame(
             user_events
-            .drop_duplicates(
-                subset=["threat"]
-            )
         )
 
+    if user_events.empty:
 
-        threats = (
-            unique_detections[
-                "threat"
-            ]
-            .tolist()
+        return {
+            "risk_score": 0,
+            "risk_level": "LOW",
+            "detections": 0,
+            "detector_types": 0,
+            "evidence": [],
+            "reasons": []
+        }
+
+    if "threat" not in user_events.columns:
+
+        return {
+            "risk_score": 0,
+            "risk_level": "LOW",
+            "detections": 0,
+            "detector_types": 0,
+            "evidence": [],
+            "reasons": []
+        }
+
+    events = user_events.copy()
+
+    events["threat"] = (
+        events["threat"]
+        .astype(str)
+        .str.strip()
+    )
+
+    events = events[
+        events["threat"] != ""
+    ].copy()
+
+    if events.empty:
+
+        return {
+            "risk_score": 0,
+            "risk_level": "LOW",
+            "detections": 0,
+            "detector_types": 0,
+            "evidence": [],
+            "reasons": []
+        }
+
+    # ========================================================
+    # FULL DETECTION COUNT
+    # ========================================================
+    #
+    # IMPORTANT:
+    # We retain ALL events here so repeated evidence can
+    # contribute a bounded bonus.
+    #
+    # ========================================================
+
+    total_detections = len(events)
+
+    # ========================================================
+    # DETECTOR COUNTS
+    # ========================================================
+
+    detector_counts = (
+        events["threat"]
+        .value_counts()
+        .to_dict()
+    )
+
+    # ========================================================
+    # UNIQUE DETECTOR TYPES
+    # ========================================================
+
+    unique_threats = list(
+        detector_counts.keys()
+    )
+
+    detector_type_count = len(
+        unique_threats
+    )
+
+    # ========================================================
+    # REPRESENTATIVE DETECTIONS
+    # ========================================================
+    #
+    # We use one representative row per detector for the
+    # main evidence calculation.
+    #
+    # Repeated rows are handled separately through the
+    # repetition bonus.
+    #
+    # ========================================================
+
+    representative_events = (
+        events
+        .drop_duplicates(
+            subset=["threat"]
+        )
+        .copy()
+    )
+
+    # ========================================================
+    # BASE SCORE
+    # ========================================================
+
+    score = 0
+
+    evidence = []
+
+    reasons = []
+
+    # ========================================================
+    # DETECTOR SCORES
+    # ========================================================
+
+    for _, detection in (
+        representative_events.iterrows()
+    ):
+
+        threat = str(
+            detection["threat"]
+        ).strip()
+
+        weight = get_detector_weight(
+            threat
         )
 
-
-        # ----------------------------------------------------
-        # Individual detector scores
-        # ----------------------------------------------------
-
-        detector_scores = []
-
-        evidence_reasons = []
-
-
-        for _, detection in unique_detections.iterrows():
-
-            threat = detection[
-                "threat"
-            ]
-
-
-            score_data = calculate_detector_score(
-                threat,
+        evidence_bonus = (
+            calculate_evidence_bonus(
                 detection
             )
+        )
+
+        detector_score = (
+            weight
+            + evidence_bonus
+        )
+
+        score += detector_score
+
+        # ----------------------------------------------------
+        # Human-readable evidence
+        # ----------------------------------------------------
+
+        evidence_description = (
+            build_evidence_description(
+                detection
+            )
+        )
+
+        evidence.append(
+            evidence_description
+        )
+
+        reasons.append(
+            {
+                "threat": threat,
+                "detector_weight": weight,
+                "evidence_bonus": evidence_bonus,
+                "score_contribution": detector_score,
+                "occurrences": detector_counts.get(
+                    threat,
+                    1
+                )
+            }
+        )
+
+    # ========================================================
+    # REPETITION BONUSES
+    # ========================================================
+
+    repetition_bonus_total = 0
+
+    for threat, count in (
+        detector_counts.items()
+    ):
+
+        repetition_bonus = (
+            calculate_repetition_bonus(
+                count
+            )
+        )
+
+        repetition_bonus_total += (
+            repetition_bonus
+        )
+
+        if repetition_bonus > 0:
+
+            reasons.append(
+                {
+                    "threat": threat,
+                    "detector_weight": 0,
+                    "evidence_bonus": 0,
+                    "repetition_bonus": repetition_bonus,
+                    "score_contribution": repetition_bonus,
+                    "occurrences": count
+                }
+            )
+
+    # --------------------------------------------------------
+    # Add bounded repetition score
+    # --------------------------------------------------------
+
+    score += repetition_bonus_total
+
+    # ========================================================
+    # CORRELATION BONUS
+    # ========================================================
+
+    correlation_bonus = (
+        calculate_correlation_bonus(
+            unique_threats
+        )
+    )
+
+    score += correlation_bonus
+
+    if correlation_bonus > 0:
+
+        reasons.append(
+            {
+                "type": "correlation",
+                "correlation_bonus": correlation_bonus,
+                "score_contribution": correlation_bonus
+            }
+        )
+
+    # ========================================================
+    # DIMINISHING RETURNS
+    # ========================================================
+    #
+    # Many independent detector types should increase risk,
+    # but not linearly forever.
+    #
+    # ========================================================
+
+    if detector_type_count >= 5:
+
+        score += 8
+
+        reasons.append(
+            {
+                "type": "multi_signal",
+                "score_contribution": 8,
+                "description": (
+                    "Five or more independent "
+                    "risk signals detected"
+                )
+            }
+        )
+
+    elif detector_type_count >= 4:
+
+        score += 6
+
+        reasons.append(
+            {
+                "type": "multi_signal",
+                "score_contribution": 6,
+                "description": (
+                    "Four independent "
+                    "risk signals detected"
+                )
+            }
+        )
+
+    elif detector_type_count >= 3:
+
+        score += 4
+
+        reasons.append(
+            {
+                "type": "multi_signal",
+                "score_contribution": 4,
+                "description": (
+                    "Three independent "
+                    "risk signals detected"
+                )
+            }
+        )
+
+    # ========================================================
+    # HIGH-RISK SESSION ESCALATION
+    # ========================================================
+
+    privileged_session = events[
+        (
+            events["threat"]
+            == "Suspicious Session Activity"
+        )
+        &
+        (
+            events.get(
+                "session_action",
+                pd.Series(
+                    index=events.index,
+                    dtype="object"
+                )
+            )
+            .astype(str)
+            .str.lower()
+            .eq("privileged_action")
+        )
+    ]
+
+    if not privileged_session.empty:
+
+        score += 8
+
+        reasons.append(
+            {
+                "type": "privileged_session",
+                "score_contribution": 8,
+                "description": (
+                    "Privileged session activity detected"
+                )
+            }
+        )
+
+    # ========================================================
+    # SCORE CAP
+    # ========================================================
+
+    score = cap_score(
+        score
+    )
+
+    # ========================================================
+    # FINAL RISK LEVEL
+    # ========================================================
+
+    risk_level = get_risk_level(
+        score
+    )
+
+    # ========================================================
+    # RESULT
+    # ========================================================
+
+    return {
+
+        "risk_score": score,
+
+        "risk_level": risk_level,
+
+        "detections": total_detections,
+
+        "detector_types": detector_type_count,
+
+        "evidence": evidence,
+
+        "reasons": reasons,
+
+        "detector_counts": detector_counts,
+
+        "repetition_bonus": repetition_bonus_total,
+
+        "correlation_bonus": correlation_bonus
+    }
 
 
-            detector_scores.append(
-                score_data[
-                    "score_contribution"
+# ============================================================
+# ANALYZE ALL ACCOUNTS
+# ============================================================
+
+def analyze_account_risk(
+    detections
+):
+
+    if detections is None:
+
+        return pd.DataFrame()
+
+    if not isinstance(
+        detections,
+        pd.DataFrame
+    ):
+
+        detections = pd.DataFrame(
+            detections
+        )
+
+    if detections.empty:
+
+        return pd.DataFrame()
+
+    if "user_id" not in detections.columns:
+
+        return pd.DataFrame()
+
+    results = []
+
+    # ========================================================
+    # USER LEVEL ANALYSIS
+    # ========================================================
+
+    for user_id, user_events in (
+        detections.groupby("user_id")
+    ):
+
+        risk = calculate_account_risk(
+            user_events
+        )
+
+        results.append(
+            {
+                "user_id": user_id,
+
+                "risk_score": risk[
+                    "risk_score"
+                ],
+
+                "risk_level": risk[
+                    "risk_level"
+                ],
+
+                "detections": risk[
+                    "detections"
+                ],
+
+                "detector_types": risk[
+                    "detector_types"
+                ],
+
+                "evidence": risk[
+                    "evidence"
+                ],
+
+                "reasons": risk[
+                    "reasons"
+                ],
+
+                "detector_counts": risk[
+                    "detector_counts"
+                ],
+
+                "repetition_bonus": risk[
+                    "repetition_bonus"
+                ],
+
+                "correlation_bonus": risk[
+                    "correlation_bonus"
                 ]
-            )
-
-
-            # -----------------------------------------------
-            # Human-readable evidence
-            # -----------------------------------------------
-
-            if threat == "Multiple Failed Login Attempts":
-
-                failed_attempts = safe_int(
-                    detection.get(
-                        "failed_attempts",
-                        0
-                    )
-                )
-
-                evidence_reasons.append(
-                    f"{failed_attempts} failed login attempts detected"
-                )
-
-
-            elif threat == "Password Spraying":
-
-                targeted_users = safe_int(
-                    detection.get(
-                        "targeted_users",
-                        0
-                    )
-                )
-
-                evidence_reasons.append(
-                    f"{targeted_users} accounts targeted by password spraying"
-                )
-
-
-            elif threat == "Unusual Login Location":
-
-                location = str(
-                    detection.get(
-                        "detected_location",
-                        "unknown location"
-                    )
-                )
-
-                evidence_reasons.append(
-                    f"Login detected from unusual location: {location}"
-                )
-
-
-            elif threat == "Unknown / New Device":
-
-                device = str(
-                    detection.get(
-                        "detected_device",
-                        "unknown device"
-                    )
-                )
-
-                evidence_reasons.append(
-                    f"Previously unseen device detected: {device}"
-                )
-
-
-            elif threat == "Suspicious Session Activity":
-
-                action = str(
-                    detection.get(
-                        "session_action",
-                        "suspicious activity"
-                    )
-                )
-
-                evidence_reasons.append(
-                    f"Suspicious session action detected: {action}"
-                )
-
-
-            elif threat == "Sudden Account Behaviour Change":
-
-                indicators = str(
-                    detection.get(
-                        "indicators",
-                        ""
-                    )
-                )
-
-                if indicators:
-
-                    evidence_reasons.append(
-                        f"Sudden behavioural change: {indicators}"
-                    )
-
-                else:
-
-                    evidence_reasons.append(
-                        "Sudden change in account behaviour detected"
-                    )
-
-
-        # ----------------------------------------------------
-        # Base detector score
-        # ----------------------------------------------------
-
-        base_score = sum(
-            detector_scores
+            }
         )
-
-
-        # ----------------------------------------------------
-        # Correlation
-        # ----------------------------------------------------
-
-        correlation_bonus, correlation_reasons = (
-            calculate_correlation_bonus(
-                threats
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # Diminishing returns
-        # ----------------------------------------------------
-        #
-        # The first three detector signals contribute fully.
-        #
-        # Additional detectors still increase confidence,
-        # but increasingly less aggressively.
-        #
-        # This prevents every 5-6 detector account from
-        # automatically becoming 100/100.
-        # --------------------------------------------------------
-
-        sorted_scores = sorted(
-            detector_scores,
-            reverse=True
-        )
-
-
-        weighted_score = 0
-
-        for index, score in enumerate(
-            sorted_scores
-        ):
-
-            if index == 0:
-
-                multiplier = 1.00
-
-            elif index == 1:
-
-                multiplier = 0.85
-
-            elif index == 2:
-
-                multiplier = 0.70
-
-            elif index == 3:
-
-                multiplier = 0.50
-
-            elif index == 4:
-
-                multiplier = 0.35
-
-            else:
-
-                multiplier = 0.20
-
-
-            weighted_score += (
-                score *
-                multiplier
-            )
-
-
-        # ----------------------------------------------------
-        # Combine score
-        # ----------------------------------------------------
-
-        raw_score = (
-            weighted_score +
-            correlation_bonus
-        )
-
-
-        # ----------------------------------------------------
-        # Strong evidence adjustment
-        # ----------------------------------------------------
-
-        strong_signals = 0
-
-
-        if (
-            "Password Spraying"
-            in threats
-        ):
-
-            strong_signals += 1
-
-
-        if (
-            "Multiple Failed Login Attempts"
-            in threats
-        ):
-
-            strong_signals += 1
-
-
-        if (
-            "Suspicious Session Activity"
-            in threats
-        ):
-
-            strong_signals += 1
-
-
-        if strong_signals >= 3:
-
-            raw_score += 8
-
-            evidence_reasons.append(
-                "Multiple strong authentication attack signals detected"
-            )
-
-
-        # ----------------------------------------------------
-        # Behavioural corroboration
-        # ----------------------------------------------------
-
-        if (
-            "Sudden Account Behaviour Change"
-            in threats
-            and
-            len(threats) >= 2
-        ):
-
-            raw_score += 5
-
-            evidence_reasons.append(
-                "Behavioural anomaly corroborates other suspicious signals"
-            )
-
-
-        # ----------------------------------------------------
-        # Cap
-        # ----------------------------------------------------
-
-        risk_score = int(
-            round(
-                min(
-                    raw_score,
-                    100
-                )
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # Risk level
-        # ----------------------------------------------------
-
-        if risk_score >= HIGH_THRESHOLD:
-
-            risk_level = "HIGH"
-
-        elif risk_score >= LOW_THRESHOLD:
-
-            risk_level = "MEDIUM"
-
-        else:
-
-            risk_level = "LOW"
-
-
-        # ----------------------------------------------------
-        # Combined reasons
-        # ----------------------------------------------------
-
-        all_reasons = (
-            evidence_reasons +
-            correlation_reasons
-        )
-
-
-        # Remove duplicate reasons
-        all_reasons = list(
-            dict.fromkeys(
-                all_reasons
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # Detector summary
-        # ----------------------------------------------------
-
-        detectors_triggered = ", ".join(
-            threats
-        )
-
-
-        # ----------------------------------------------------
-        # Final user report
-        # ----------------------------------------------------
-
-        reports.append({
-
-            "user_id": user_id,
-
-            "risk_score": risk_score,
-
-            "risk_level": risk_level,
-
-            "detector_count": len(
-                threats
-            ),
-
-            "detectors_triggered":
-                detectors_triggered,
-
-            "reasons":
-                " | ".join(
-                    all_reasons
-                ),
-
-            "base_score":
-                round(
-                    base_score,
-                    2
-                ),
-
-            "correlation_bonus":
-                correlation_bonus
-        })
-
-
-        # ----------------------------------------------------
-        # Technical detection details
-        # ----------------------------------------------------
-
-        for _, detection in unique_detections.iterrows():
-
-            detail = detection.to_dict()
-
-            detail[
-                "user_risk_score"
-            ] = risk_score
-
-            detail[
-                "user_risk_level"
-            ] = risk_level
-
-            detail[
-                "detector_count"
-            ] = len(
-                threats
-            )
-
-            detection_details.append(
-                detail
-            )
-
 
     # ========================================================
-    # DATAFRAMES
+    # DATAFRAME
     # ========================================================
 
-    risk_report = pd.DataFrame(
-        reports
+    result_df = pd.DataFrame(
+        results
     )
-
-
-    detection_details = pd.DataFrame(
-        detection_details
-    )
-
 
     # ========================================================
     # SORT BY RISK
     # ========================================================
 
-    risk_order = {
-        "HIGH": 3,
-        "MEDIUM": 2,
-        "LOW": 1
-    }
+    if not result_df.empty:
 
+        risk_order = {
+            "HIGH": 3,
+            "MEDIUM": 2,
+            "LOW": 1
+        }
 
-    if not risk_report.empty:
-
-        risk_report[
-            "_risk_order"
-        ] = risk_report[
-            "risk_level"
-        ].map(
-            risk_order
+        result_df["_risk_order"] = (
+            result_df["risk_level"]
+            .map(risk_order)
+            .fillna(0)
         )
 
-
-        risk_report = (
-            risk_report
+        result_df = (
+            result_df
             .sort_values(
                 [
                     "_risk_order",
@@ -1019,12 +1052,28 @@ def build_risk_report(
             )
         )
 
+    return result_df
 
-    # ========================================================
-    # RETURN
-    # ========================================================
 
-    return (
-        risk_report,
-        detection_details
+# ============================================================
+# MAIN RISK ENGINE ENTRY POINT
+# ============================================================
+
+def run_risk_engine(
+    detections
+):
+
+    return analyze_account_risk(
+        detections
     )
+
+
+# ============================================================
+# BACKWARD-COMPATIBILITY ALIASES
+# ============================================================
+
+calculate_risk = calculate_account_risk
+
+analyze_risks = analyze_account_risk
+
+run = run_risk_engine
