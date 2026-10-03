@@ -7,6 +7,51 @@ import pandas as pd
 # ============================================================
 
 
+
+
+# ============================================================
+# INPUT SAFETY HELPERS
+# ============================================================
+
+def _prepare_events(events, required_columns=None, optional_columns=None):
+    """
+    Prepare organisation telemetry without requiring attack labels.
+
+    Required columns are necessary for a detector to operate. If one of
+    them is missing, the detector should return an empty result instead
+    of crashing the entire analysis pipeline. Optional columns are added
+    with safe defaults when unavailable.
+    """
+
+    if events is None or not isinstance(events, pd.DataFrame):
+        return None, list(required_columns or [])
+
+    events = events.copy()
+
+    required_columns = list(required_columns or [])
+    optional_columns = list(optional_columns or [])
+
+    missing_required = [
+        column
+        for column in required_columns
+        if column not in events.columns
+    ]
+
+    if missing_required:
+        return None, missing_required
+
+    for column in optional_columns:
+        if column not in events.columns:
+            events[column] = ""
+
+    return events, []
+
+
+def _empty_result(columns):
+    """Return a consistent empty detector result."""
+    return pd.DataFrame(columns=columns)
+
+
 # ============================================================
 # DETECTOR 1: MULTIPLE FAILED LOGIN ATTEMPTS
 # ============================================================
@@ -17,7 +62,29 @@ def detect_multiple_failed_logins(
     window_minutes=10
 ):
 
-    events = events.copy()
+    events, missing_columns = _prepare_events(
+        events,
+        required_columns=[
+            "timestamp",
+            "user_id",
+            "login_status"
+        ],
+        optional_columns=["ip_address"]
+    )
+
+    if events is None:
+        return _empty_result([
+            "user_id",
+            "threat",
+            "failed_attempts",
+            "window_minutes",
+            "unique_source_ips",
+            "source_ips",
+            "first_attempt",
+            "last_attempt",
+            "attempts_per_minute",
+            "risk"
+        ])
 
     # ========================================================
     # VALIDATE / CONVERT TIMESTAMP
@@ -231,7 +298,27 @@ def detect_password_spraying(
     window_minutes=10
 ):
 
-    events = events.copy()
+    events, missing_columns = _prepare_events(
+        events,
+        required_columns=[
+            "timestamp",
+            "user_id",
+            "ip_address",
+            "login_status"
+        ]
+    )
+
+    if events is None:
+        return _empty_result([
+            "ip_address",
+            "threat",
+            "targeted_users",
+            "targeted_user_ids",
+            "attempt_count",
+            "first_attempt",
+            "last_attempt",
+            "risk"
+        ])
 
     events["timestamp"] = pd.to_datetime(
         events["timestamp"],
@@ -375,7 +462,28 @@ def detect_unusual_locations(
     min_history=3
 ):
 
-    events = events.copy()
+    events, missing_columns = _prepare_events(
+        events,
+        required_columns=[
+            "timestamp",
+            "user_id",
+            "location"
+        ],
+        optional_columns=["event_id"]
+    )
+
+    if events is None:
+        return _empty_result([
+            "event_id",
+            "user_id",
+            "threat",
+            "detected_location",
+            "normal_locations",
+            "baseline_source",
+            "historical_events",
+            "timestamp",
+            "risk"
+        ])
 
     # ========================================================
     # PREPARE EVENTS
@@ -592,7 +700,28 @@ def detect_unknown_devices(
     min_history=3
 ):
 
-    events = events.copy()
+    events, missing_columns = _prepare_events(
+        events,
+        required_columns=[
+            "timestamp",
+            "user_id",
+            "device"
+        ],
+        optional_columns=["event_id"]
+    )
+
+    if events is None:
+        return _empty_result([
+            "event_id",
+            "user_id",
+            "threat",
+            "detected_device",
+            "known_devices",
+            "baseline_source",
+            "historical_events",
+            "timestamp",
+            "risk"
+        ])
 
     # ========================================================
     # PREPARE EVENTS
@@ -809,7 +938,37 @@ def detect_suspicious_sessions(
     rapid_action_window_minutes=5
 ):
 
-    events = events.copy()
+    events, missing_columns = _prepare_events(
+        events,
+        required_columns=[
+            "timestamp",
+            "user_id",
+            "login_status"
+        ],
+        optional_columns=[
+            "ip_address",
+            "location",
+            "device"
+        ]
+    )
+
+    if events is None:
+        return _empty_result([
+            "user_id",
+            "threat",
+            "indicators",
+            "baseline_events",
+            "recent_events",
+            "baseline_failed_rate",
+            "recent_failed_rate",
+            "baseline_ips",
+            "recent_ips",
+            "baseline_locations",
+            "recent_locations",
+            "baseline_devices",
+            "recent_devices",
+            "risk"
+        ])
 
     # ========================================================
     # PREPARE DATA
@@ -860,6 +1019,14 @@ def detect_suspicious_sessions(
             "session_id"
         ]
     ).copy()
+
+    # Device and location are useful evidence but are not required
+    # for session-level detection.
+    if "device" not in events.columns:
+        events["device"] = ""
+
+    if "location" not in events.columns:
+        events["location"] = ""
 
     events["session_action"] = (
         events["session_action"]
